@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime artifacts
+runs/*
+!runs/.gitkeep
+results/*
+!results/.gitkeep
+
+# Secrets / local config overrides
+*.local.yaml
+.env
+
+# Local Claude settings
+.claude/
+
+# Engagement-specific scope — keep private; copy from scope.example.yaml
+config/scope.yaml
+
+# Large user wordlists — ship only the small starters
+wordlists/ffuf/*.txt
+!wordlists/ffuf/common.txt
+!wordlists/ffuf/directories.txt
+!wordlists/ffuf/vhosts.txt

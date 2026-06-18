@@ -1,0 +1,12 @@
+# Named wordlists referenced by logical name from modules (e.g. ffuf).
+# Paths are resolved relative to the directory you run reconecoboost from
+# (the project root by default). Drop your own lists into wordlists/<tool>/
+# or point these entries at absolute paths elsewhere.
+
+wordlists:
+  directories:
+    path: wordlists/ffuf/directories.txt  # used by dir_bruteforce (ffuf)
+  common:
+    path: wordlists/ffuf/common.txt
+  vhosts:
+    path: wordlists/ffuf/vhosts.txt        # used by vhost_discovery (ffuf)

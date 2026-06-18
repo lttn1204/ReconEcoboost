@@ -1,0 +1,23 @@
+# Engagement scope template. COPY this to scope.yaml and edit for your engagement:
+#     cp config/scope.example.yaml config/scope.yaml
+# scope.yaml is gitignored so your real targets are never committed.
+#
+# Controls which hosts the framework will ACTIVELY touch. Discovery (subfinder /
+# vhost) always runs against the seed target(s); everything downstream — probing,
+# crawling, directory fuzzing, fingerprinting — is restricted to the patterns
+# below. Subdomain enumeration turns on automatically when in_scope uses a "*".
+#
+# Pattern syntax:
+#   example.com      exact host only (the apex) — NOT its subdomains
+#   *.example.com    any subdomain of example.com (a.example.com, x.y.example.com)
+#
+# The seed target(s) are ALWAYS in scope, even under a wildcard.
+# out_of_scope wins over everything.
+
+in_scope:
+  - "example.com"
+  # - "*.example.com"        # uncomment to enumerate + scan all subdomains
+
+out_of_scope: []
+  # - "admin.example.com"
+  # - "*.internal.example.com"

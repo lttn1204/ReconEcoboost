@@ -1,0 +1,47 @@
+# Pipeline composition. Profiles select which stages run; the orchestrator
+# resolves final order from each module's requires/produces edges.
+
+domain: web
+
+# Recursive subdomain/vhost discovery: re-feed found subdomains as new seeds.
+#   1   single pass (no recursion) — the default
+#   2   also scan subdomains-of-subdomains
+#   100 keep going until no new subdomains are found (bounded by this number)
+discovery:
+  recursive_depth: 5
+
+profiles:
+  default:
+    stages:
+      - asset_discovery
+      - vhost_discovery
+      - alive_detection
+      - crawling
+      - historical_urls
+      - tech_fingerprint
+      - dir_bruteforce
+      - url_probe
+      - nuclei_scan
+      - normalization
+      - ai_recon_intel
+      - ai_pentest
+  quick:
+    stages:
+      - asset_discovery
+      - alive_detection
+      - tech_fingerprint
+
+  # Test ONLY the targets you pass on the CLI — no subdomain enumeration.
+  # Use with: reconecoboost a.com.vn elearning.a.com.vn --run --profile direct
+  direct:
+    stages:
+      - alive_detection
+      - crawling
+      - historical_urls
+      - tech_fingerprint
+      - dir_bruteforce
+      - url_probe
+      - nuclei_scan
+      - normalization
+      - ai_recon_intel
+      - ai_pentest

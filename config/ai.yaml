@@ -1,0 +1,29 @@
+# AI provider configuration.
+#   claude       metered Messages API (needs ANTHROPIC_API_KEY)
+#   claude-code  the `claude` CLI headless — uses your Pro/Max SUBSCRIPTION
+#                (you must run `claude` and /login first; ANTHROPIC_API_KEY must
+#                 be UNSET, or it bills the API instead of the subscription)
+#   stub         offline placeholder (no network)
+provider: claude-code
+model: sonnet                 # for claude-code use a CLI alias (sonnet|opus) or a full id
+
+# What the AI does after recon:
+#   off      tools only — no AI is invoked
+#   analyze  compile recon intelligence (tech + sensitive cases) for manual pentest
+#   pentest  analyze, then AI-driven vulnerability hunting
+# Override per run with --ai-mode, or disable with --no-ai.
+mode: analyze
+
+params:
+  max_tokens: 4096
+  effort: high                # low | medium | high | xhigh | max
+  # NOTE: temperature/top_p are intentionally omitted — Opus 4.8 rejects them.
+
+prompts:
+  dir: prompts
+
+budget:
+  max_tokens_per_run: null
+
+redaction:
+  enabled: true

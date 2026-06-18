@@ -1,0 +1,37 @@
+# ReconEcoboost starter "common files" wordlist for ffuf — replace with your own.
+# One entry per line. Lines starting with '#' are ignored (ffuf runs with -ic).
+index.html
+index.php
+home
+about
+contact
+help
+faq
+search
+sitemap
+robots.txt
+sitemap.xml
+favicon.ico
+.env
+.env.local
+.env.bak
+config.php
+config.json
+config.yaml
+settings.json
+package.json
+composer.json
+.git/config
+.gitignore
+.htaccess
+.htpasswd
+web.config
+backup.zip
+backup.tar.gz
+db.sql
+dump.sql
+error_log
+access_log
+README.md
+CHANGELOG.md
+LICENSE

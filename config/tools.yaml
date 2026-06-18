@@ -1,0 +1,60 @@
+# Per-tool execution settings. Consumed by ToolManager + CommandExecutor.
+
+defaults:
+  timeout_s: 600
+  retries: 1
+  retry_backoff_s: 2
+  # Default requests-per-second for active (HTTP-issuing) tools.
+  # null = unlimited. Applied only to tools that define a `rate_flag` below.
+  # A per-tool `rate_limit` overrides this; per-tool null inherits this default.
+  rate_limit: 100
+
+tools:
+  subfinder:
+    binary: subfinder
+    # passive enumeration — no per-target request rate
+
+  httpx:
+    binary: httpx
+    # ProjectDiscovery httpx is auto-resolved from PATH (the framework already
+    # skips any Python 'httpx' shim inside the active venv). If a Python 'httpx'
+    # CLI elsewhere on PATH (e.g. ~/.local/bin) still shadows it, pin the real
+    # binary in config/tools.local.yaml (gitignored), e.g.:
+    #   tools: { httpx: { path: /your/go/bin/httpx } }
+    rate_flag: "-rl"        # httpx: requests per second
+    rate_limit: null        # null = inherit defaults.rate_limit; a number overrides; 0 = unlimited
+
+  katana:
+    binary: katana
+    rate_flag: "-rl"        # katana: max requests per second
+    rate_limit: null
+
+  gau:
+    binary: gau
+    # queries archives, not the target — no request-rate flag
+
+  ffuf:
+    binary: ffuf
+    version_args: ["-V"]    # ffuf uses -V for version (not --version)
+    rate_flag: "-rate"      # ffuf: requests per second (0 = unlimited)
+    rate_limit: null
+    # HTTP methods to fuzz with — one ffuf pass per method (per host).
+    # Per-method status/size is stored on each URL so the agent can spot
+    # anomalies (e.g. TRACE/DEBUG enabled, POST allowed where GET is 403).
+    # Each method multiplies the work, so add deliberately.
+    methods: ["GET","POST"]        # e.g. [GET, POST, HEAD, OPTIONS, PUT, DELETE, PATCH, TRACE, DEBUG]
+
+  whatweb:
+    binary: whatweb
+    # single-target fingerprint — no request-rate flag
+
+  nuclei:
+    binary: nuclei
+    version_args: ["-version"]   # nuclei uses -version
+    rate_flag: "-rl"             # nuclei: requests per second
+    rate_limit: null
+    # Severities to report (drops 'info' noise). [] or omit = all severities.
+    severity: ["low", "medium", "high", "critical"]
+    # Scans the root of EVERY live subdomain (templates are root-relative).
+    # max_targets: 500          # cap hosts fed to nuclei (omit = no cap)
+    # timeout_s: 1800           # raise for large scopes (default = executor timeout)
