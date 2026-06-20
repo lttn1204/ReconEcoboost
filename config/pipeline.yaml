@@ -10,6 +10,22 @@ domain: web
 discovery:
   recursive_depth: 5
 
+# Deterministic triage (no LLM): ranks assets by signal and groups noise.
+# Inspired by uro (declutter), reNgine (interesting keywords), gf-patterns
+# (per-vuln-class params) — but non-destructive: nothing is dropped, only
+# demoted/grouped. Results saved to results/<run_id>/triage.{json,txt}.
+triage:
+  top_n: 25              # how many ranked targets to surface (report shortlist)
+  cluster_threshold: 5  # >= N URLs sharing host+status+length => catch-all noise
+  # weights:            # optional overrides (defaults in analysis/triage.py)
+  #   nuclei_critical: 100
+  #   method_anomaly: 60
+  #   dangerous_method: 50
+  #   param_vuln_class: 35
+  #   path_keyword: 40
+  #   catch_all: -50
+  #   static: -30
+
 profiles:
   default:
     stages:
@@ -23,6 +39,7 @@ profiles:
       - url_probe
       - nuclei_scan
       - normalization
+      - triage
       - ai_recon_intel
       - ai_pentest
   quick:
@@ -43,5 +60,6 @@ profiles:
       - url_probe
       - nuclei_scan
       - normalization
+      - triage
       - ai_recon_intel
       - ai_pentest

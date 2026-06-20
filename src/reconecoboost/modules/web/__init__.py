@@ -16,6 +16,7 @@ from . import (  # noqa: F401  (imported for registration side effects)
     nuclei_scan,
     screenshot,
     tech_fingerprint,
+    triage,
     url_probe,
     vhost_discovery,
 )

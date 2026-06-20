@@ -34,9 +34,14 @@ def build_report(store, graph, run_id: str) -> dict[str, Any]:
 
     findings_by_kind: dict[str, list[dict]] = {}
     finding_count = 0
+    top_targets: dict | None = None
     for finding in store.list_findings(run_id):
         record = dict(finding)
         record["detail"] = _parse(record.pop("detail_json", None), None)
+        if record["kind"] == "triage":
+            # deterministic triage ranking — rendered as its own section
+            top_targets = record["detail"]
+            continue
         findings_by_kind.setdefault(record["kind"], []).append(record)
         finding_count += 1
 
@@ -54,6 +59,7 @@ def build_report(store, graph, run_id: str) -> dict[str, Any]:
         "relations": relations,
         "finding_count": finding_count,
         "findings": findings_by_kind,
+        "top_targets": top_targets,
         "tool_runs": tool_runs,
         "graph": graph_stats,
     }

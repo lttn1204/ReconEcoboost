@@ -77,6 +77,7 @@ module's `requires`/`produces`, not a hard-coded list.
 | `nuclei_scan` | nuclei | host → findings | Template scan of **every live subdomain's host root** → **verified** `finding` rows |
 | `screenshot` | _(future: gowitness)_ | host → artifact | Optional, not wired in v1 |
 | `normalization` | — | url… → host links | Cross-tool consolidation |
+| `triage` | — (deterministic) | assets + findings → ranked shortlist | Score/rank assets by signal, group noise → `results/<run_id>/triage.{json,txt}` + report "Top Targets" (**no LLM, zero tokens**) |
 | `ai_recon_intel` | Claude | graph → intel | Compile tech + interesting endpoints + sensitive cases for manual analysis (AI mode ≥ `analyze`) |
 | `ai_pentest` | Claude | intel → vulnerabilities | AI-driven, testable vulnerability hypotheses with steps (AI mode `pentest`) |
 
@@ -302,6 +303,73 @@ nuclei:
 Notes: the default `severity` drops `info` (so a clean run can legitimately be
 empty — set `severity: []` to see info-level output). It scans on its own
 recon-stage run; `--run-id` only re-runs the AI stages, not nuclei.
+
+### Triage — ranked "Top Targets" (deterministic, no LLM)
+
+After recon, the `triage` stage scores every asset by signal and surfaces a
+ranked shortlist — so you (and the AI) focus on what matters instead of a flat
+URL dump. It runs entirely in the engine: **no LLM, zero tokens.** The approach
+is synthesized from [uro](https://github.com/s0md3v/uro) (declutter),
+[reNgine](https://github.com/yogeshojha/rengine) (interesting keywords) and
+[gf-patterns](https://github.com/1ndianl33t/Gf-Patterns) (per-vuln-class params),
+with one rule of its own: **it is non-destructive — nothing is dropped from the
+database; noise is only demoted and grouped.**
+
+Signals (configurable weights): nuclei findings, **HTTP-method anomalies**
+(e.g. `POST 200` where `GET 403`) and dangerous methods (PUT/DELETE/TRACE…),
+**parameters tagged by likely vuln class** (sqli/lfi/ssrf/redirect/xss/idor),
+interesting path keywords (`admin`, `api`, `upload`, `.git`…), and auth-protected
+statuses (401/403). Catch-all clusters (many URLs sharing status+length) and
+static assets are demoted/collapsed — **but never** if the URL carries real
+signal (a finding, a non-GET method, a vuln-class param, or a keyword).
+
+Output:
+- `results/<run_id>/triage.txt` — human-readable ranked list (for quick tracking)
+- `results/<run_id>/triage.json` — full structured ranking (nothing dropped)
+- a **"Top Targets"** section at the top of `report.md` / `report.html` / `report.json`
+
+Configure in [config/pipeline.yaml](config/pipeline.yaml) under `triage`:
+
+```yaml
+triage:
+  top_n: 25              # how many ranked targets to surface in the shortlist
+  cluster_threshold: 5  # >= N URLs sharing host+status+length => catch-all noise
+  # weights: { method_anomaly: 60, param_vuln_class: 35, catch_all: -50, ... }
+```
+
+### Curated AI context (token control)
+
+The AI stages don't get the whole graph dumped at them — by default they receive
+only the **triage shortlist** (top-N ranked targets + guaranteed method/param
+leads + their 1-hop neighbors), with each node annotated with its triage
+score/tags/reasons. On a 400-URL scope this is ~**98% fewer tokens** than the full
+graph, with no loss of signal (the high-value endpoints are guaranteed in). The
+deterministic engine decides what's interesting; the agent only reasons over it.
+
+**Sharing the budget across subdomains** — `context_scope` decides how the
+shortlist is split when the target has many subdomains:
+- `global` — one pooled ranking; the top-N best assets across **all** hosts. A
+  noisy subdomain can crowd out quiet ones.
+- `per_host` — fair coverage; every live host root (optional) + each subdomain's
+  top-K URLs, round-robined so quiet subdomains are still represented.
+
+Guaranteed leads (method anomalies, vuln-class params) from **every** subdomain
+are always included regardless of scope. `context_max_nodes` is the hard ceiling
+either way.
+
+Configure in [config/ai.yaml](config/ai.yaml):
+
+```yaml
+context: curated                  # curated (default) | full
+context_scope: global            # global | per_host
+context_top_n: 25                # GLOBAL: total ranked targets across all hosts
+context_per_host: 5              # PER_HOST: top URLs kept per subdomain
+context_include_host_roots: true # PER_HOST: always include every live host root
+context_max_nodes: 60            # hard ceiling on nodes sent (incl. neighbors)
+```
+
+Falls back to the full graph automatically when no triage ranking exists (e.g.
+`--run-id` on an older run), or set `context: full` to send everything.
 
 ### Rate limiting (requests/sec)
 

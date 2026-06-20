@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ..core.models import Domain, ModuleResult, ModuleStatus, Stage
 from ..core.module import BaseModule
@@ -111,6 +112,134 @@ def _graph_payload(ctx) -> dict:
     return Subgraph(nodes=nodes, edges=edges).to_prompt_dict()
 
 
+def _triage_detail(ctx) -> dict | None:
+    """The persisted deterministic-triage ranking, if the triage stage ran."""
+    for finding in ctx.repository.list_findings(ctx.run_id):
+        if finding.get("kind") == "triage" and finding.get("detail_json"):
+            try:
+                return json.loads(finding["detail_json"])
+            except (json.JSONDecodeError, TypeError):
+                return None
+    return None
+
+
+def _host_of(key: str) -> str:
+    """The origin (scheme://netloc) a URL belongs to; a host key maps to itself."""
+    parts = urlsplit(key)
+    if parts.scheme and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return key
+
+
+def _select_keys(cfg: dict, triage: dict, host_keys: list[str]) -> list[str]:
+    """Ordered, priority-ranked keys to seed the curated context.
+
+    Priority (earliest survives the max_nodes cap):
+      1. guaranteed method/param/anomaly leads (every host)
+      2. scope-specific picks:
+         - global   : the top-N ranked targets across all hosts
+         - per_host : (optionally) every live host root, then each subdomain's
+                      top-K URLs, round-robined for fair coverage
+    """
+    top = triage.get("top", []) or []
+    wanted: list[str] = []
+
+    def add(k: str) -> None:
+        if k and k not in wanted:
+            wanted.append(k)
+
+    for key in triage.get("must_include", []) or []:   # 1. always-in leads
+        add(key)
+
+    scope = str(cfg.get("context_scope", "global")).lower()
+    if scope == "per_host":
+        if bool(cfg.get("context_include_host_roots", True)):
+            for hk in host_keys:                        # every live subdomain root
+                add(hk)
+        per_host = int(cfg.get("context_per_host", 5) or 5)
+        by_host: dict[str, list[str]] = {}
+        for item in top:                                # urls grouped by host, score order
+            if item.get("kind") == "host":
+                continue
+            by_host.setdefault(_host_of(item["key"]), []).append(item["key"])
+        for i in range(per_host):                       # round-robin for fairness
+            for urls in by_host.values():
+                if i < len(urls):
+                    add(urls[i])
+    else:  # global
+        top_n = int(cfg.get("context_top_n", 25) or 25)
+        for item in top[:top_n]:
+            add(item["key"])
+    return wanted
+
+
+def _curated_payload(ctx) -> dict:
+    """Compact, pre-ranked context for the AI stages.
+
+    Instead of dumping the whole graph, send only the triage shortlist plus their
+    1-hop neighbors, annotated with the deterministic triage score/tags/reasons.
+    Two scopes (config ``ai.context_scope``): ``global`` (top-N across all hosts)
+    or ``per_host`` (each subdomain represented). ``ai.context_max_nodes`` is the
+    hard ceiling either way.
+
+    Falls back to the full graph when ``ai.context: full``, or when no triage
+    ranking exists (e.g. ``--run-id`` on an older run).
+    """
+    cfg = ctx.config.ai or {}
+    if str(cfg.get("context", "curated")).lower() == "full":
+        return _graph_payload(ctx)
+    triage = _triage_detail(ctx)
+    if not triage:
+        return _graph_payload(ctx)  # full-graph fallback
+
+    max_nodes = int(cfg.get("context_max_nodes", 60) or 60)
+    top = triage.get("top", []) or []
+
+    all_nodes = {n.id: n for n in ctx.graph.nodes(ctx.run_id)}
+    all_edges = ctx.graph.edges(ctx.run_id)
+    if not all_nodes:
+        return {"nodes": [], "edges": []}
+
+    key_to_id: dict[str, int] = {}
+    for nid, node in all_nodes.items():
+        key_to_id.setdefault(node.key, nid)
+
+    host_keys = [n.key for n in all_nodes.values() if n.asset_type == "host"]
+    wanted = _select_keys(cfg, triage, host_keys)
+
+    adj = Subgraph(nodes=all_nodes, edges=all_edges).adjacency(directed=False)
+    seed_ids = [key_to_id[k] for k in wanted if k in key_to_id]
+    chosen: list[int] = list(dict.fromkeys(seed_ids))   # ordered, unique, seeds first
+    # Add only *context* neighbors (the containing host, technologies) — never
+    # auto-expand a host into all its URLs, so context_top_n / per_host actually
+    # govern which URLs are included.
+    context_types = {"host", "technology", "subdomain"}
+    for nid in seed_ids:
+        for _edge, neighbor in adj.get(nid, []):
+            if neighbor not in chosen and all_nodes[neighbor].asset_type in context_types:
+                chosen.append(neighbor)
+    chosen = chosen[:max_nodes]                          # cap (seeds kept first)
+    chosen_set = set(chosen)
+
+    sub = Subgraph(
+        nodes={nid: all_nodes[nid] for nid in chosen_set},
+        edges=[e for e in all_edges if e.src_id in chosen_set and e.dst_id in chosen_set],
+    )
+    payload = sub.to_prompt_dict()
+
+    # annotate nodes with the deterministic triage signal (free leads for the AI)
+    info_by_key = {t["key"]: t for t in top}
+    for node in payload["nodes"]:
+        info = info_by_key.get(node["key"])
+        if info:
+            node["attributes"] = {
+                **(node["attributes"] or {}),
+                "_triage": {"score": info.get("score"), "tags": info.get("tags"),
+                            "reasons": info.get("reasons")},
+            }
+    return payload
+
+
 def _targets(ctx) -> str:
     return ", ".join(ctx.scope.targets) or "(unspecified)"
 
@@ -136,7 +265,7 @@ class AiReconIntel(BaseModule):
         result = ModuleResult(self.name)
         _require_ai(ctx)
 
-        payload = _graph_payload(ctx)
+        payload = _curated_payload(ctx)
         if not payload["nodes"]:
             result.status = ModuleStatus.SUCCESS
             result.meta = {"nodes": 0}
@@ -198,7 +327,7 @@ class AiPentest(BaseModule):
         result = ModuleResult(self.name)
         _require_ai(ctx)
 
-        payload = _graph_payload(ctx)
+        payload = _curated_payload(ctx)
         if not payload["nodes"]:
             result.status = ModuleStatus.SUCCESS
             result.meta = {"nodes": 0}

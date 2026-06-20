@@ -19,6 +19,25 @@ params:
   effort: high                # low | medium | high | xhigh | max
   # NOTE: temperature/top_p are intentionally omitted — Opus 4.8 rejects them.
 
+# What the AI stages receive as context (token control):
+#   curated  only the deterministic triage shortlist (ranked targets + guaranteed
+#            method/param leads + their 1-hop neighbors), annotated with triage
+#            score/tags/reasons — far fewer tokens. (default)
+#   full     the entire knowledge graph (legacy; large on big scopes)
+# Falls back to `full` automatically when no triage ranking exists.
+context: curated
+
+# How the budget is shared across subdomains:
+#   global    one pooled ranking — the top-N best assets across ALL hosts
+#   per_host  fair coverage — every live host root (optional) + each subdomain's
+#             top-K URLs, round-robined so noisy subdomains can't crowd out quiet ones
+context_scope: global
+
+context_top_n: 25               # GLOBAL scope: total ranked targets across all hosts
+context_per_host: 5             # PER_HOST scope: top URLs kept per subdomain
+context_include_host_roots: true  # PER_HOST: always include every live host root
+context_max_nodes: 60           # hard ceiling on nodes sent (incl. neighbors), either scope
+
 prompts:
   dir: prompts
 

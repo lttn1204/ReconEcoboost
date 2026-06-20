@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 @dataclass
@@ -71,6 +72,14 @@ def canonical_key(asset_type: str, key: str) -> str:
         return value.lower().rstrip(".")
     if asset_type == "technology":
         return value.lower()
-    # url / endpoint / artifact / others: keep as-is (URL canonicalization is a
-    # deliberate later refinement; over-normalizing here loses information).
+    if asset_type in ("url", "endpoint"):
+        # Scheme + host are case-insensitive → lowercase them so
+        # `https://Google.Com/x` and `https://google.com/x` collapse. The path,
+        # query and fragment ARE case-sensitive, so they are preserved as-is.
+        parts = urlsplit(value)
+        if parts.scheme and parts.netloc:
+            netloc = parts.netloc.lower().rstrip(".")
+            return urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, parts.fragment))
+        return value
+    # artifact / others: keep as-is.
     return value

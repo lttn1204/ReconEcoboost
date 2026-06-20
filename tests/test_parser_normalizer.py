@@ -34,7 +34,8 @@ def test_registry_rejects_unnamed_parser():
 
 def test_canonical_key_lowercases_hosts():
     assert canonical_key("host", "WWW.Example.COM.") == "www.example.com"
-    assert canonical_key("url", "https://Example.com/A") == "https://Example.com/A"
+    # URL scheme+host are lowercased; the (case-sensitive) path is preserved
+    assert canonical_key("url", "https://Example.com/A") == "https://example.com/A"
 
 
 def test_normalizer_dedupes_and_merges_sources():

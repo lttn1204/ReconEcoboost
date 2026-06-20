@@ -69,11 +69,32 @@ class MarkdownReportWriter(ReportWriter):
         add(f"- findings: {report.get('finding_count', 0)}")
         add("")
 
+        self._render_top_targets(report, add)
         self._render_findings(report, add)
         self._render_assets(report, add)
         self._render_tool_runs(report, add)
 
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _render_top_targets(report, add) -> None:
+        tt = report.get("top_targets")
+        if not tt:
+            return
+        add("## Top Targets (deterministic triage)")
+        add("")
+        for i, t in enumerate(tt.get("top", []), 1):
+            tags = f" `[{', '.join(t.get('tags', []))}]`" if t.get("tags") else ""
+            add(f"{i}. **`{t.get('key')}`** — score {t.get('score')}{tags}")
+            if t.get("reasons"):
+                add(f"   - {'; '.join(t['reasons'])}")
+        collapsed = tt.get("collapsed") or []
+        if collapsed:
+            add("")
+            add("**Collapsed noise clusters** (kept in DB, hidden from the shortlist):")
+            for c in collapsed:
+                add(f"- `{c.get('netloc')}` status={c.get('status')} len={c.get('length')} ×{c.get('count')}")
+        add("")
 
     @staticmethod
     def _render_findings(report, add) -> None:

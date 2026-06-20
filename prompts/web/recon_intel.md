@@ -11,7 +11,10 @@ You are given a knowledge graph of what recon discovered. Nodes are assets
 (subdomains, live hosts, URLs, technologies) with attributes; edges are typed
 relations (`subdomain -resolves_to-> host`, `url -belongs_to-> host`,
 `host -uses-> technology`). Directory brute-force hits carry `status` and
-`length` (response size).
+`length` (response size). Many nodes also carry a `_triage` annotation (a
+deterministic score, vuln-class `tags`, and `reasons`) — the assets are already
+prioritized for you; weight your attention by it (higher score and tags like
+`method-anomaly`, `ssrf`, `sqli` are the strongest leads).
 
 Knowledge graph (JSON):
 {{ graph }}
