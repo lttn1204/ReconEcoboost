@@ -74,6 +74,9 @@ module's `requires`/`produces`, not a hard-coded list.
 | `tech_fingerprint` | whatweb | host → technology | Detect technologies |
 | `dir_bruteforce` | ffuf | host → url | Content/dir brute-force, per configured HTTP method (GET/POST/…) |
 | `url_probe` | httpx | url → url | Probe discovered URLs; record each one's status/size (for reports/AI) |
+| `js_fetch` | httpx | url → response bodies | Fetch discovered JS/JSON (and live URLs) **once**; cache bodies for the two consumers below |
+| `secret_scan` | regex | bodies → findings | Regex-scan cached bodies for exposed secrets (leaklens-style) → **redacted** `finding(kind="secret")` |
+| `js_intel` | regex | bodies → url/subdomain/findings | Mine endpoints/hosts/cloud-URLs/source-maps from cached JS (leaklens `--js-intel`); toggleable |
 | `nuclei_scan` | nuclei | host → findings | Template scan of **every live subdomain's host root** → **verified** `finding` rows |
 | `screenshot` | _(future: gowitness)_ | host → artifact | Optional, not wired in v1 |
 | `normalization` | — | url… → host links | Cross-tool consolidation |
@@ -303,6 +306,89 @@ nuclei:
 Notes: the default `severity` drops `info` (so a clean run can legitimately be
 empty — set `severity: []` to see info-level output). It scans on its own
 recon-stage run; `--run-id` only re-runs the AI stages, not nuclei.
+
+### Secret scanning (leaklens-style, deterministic)
+
+The shared **`js_fetch`** stage fetches the bodies of every URL recon discovered
+(Katana **crawl**, gau **history**, ffuf **dir-fuzzing**, url_probe) **once** with
+httpx and caches them under `results/<run_id>/responses/`. It selects a URL if its
+**extension** is interesting (`.js/.json/.env/…`) **or** it's **live**
+(`scan_status`, default `[200]`) — so live HTML/API endpoints from fuzzing and URL
+history are included too; binary/media (images, fonts, css) are always skipped.
+`secret_scan` and `js_intel` then both read those cached bodies (no second
+network pass).
+
+`secret_scan` runs a deterministic regex rule engine (gitleaks/leaklens lineage)
+over the bodies — AWS/GCP/GitHub/Slack/Stripe keys, private keys, JWTs, generic
+`api_key=…` assignments, etc. **No LLM, zero tokens.**
+
+Matches are **redacted before storage** — findings keep the rule, a masked sample
+(`ghp_…AA (40 chars)`), and the URL/line, never the raw secret. Each becomes a
+`finding(kind="secret")`, and triage promotes secret-bearing URLs into the
+curated AI context as guaranteed leads. Output:
+
+- `results/<run_id>/secrets.txt` / `secrets.json`
+- a `finding(kind="secret")` per match (shown in the report)
+
+Configure in [config/pipeline.yaml](config/pipeline.yaml). What to fetch lives in
+`js_fetch` (shared); what to do with the bodies lives in `secret_scan`/`js_intel`:
+
+```yaml
+js_fetch:                        # the single shared fetch
+  enabled: true                  # off => disables both secret_scan and js_intel
+  extensions: [js, json, map, txt, xml, yml, yaml, env, config, bak]
+  scan_status: [200]             # also fetch live URLs of any extension
+  max_urls: 500
+
+secret_scan:
+  entropy:                       # Shannon-entropy detection — catches unknown/custom
+    enabled: false               #   secrets no regex matches (higher recall, more FP)
+    base64_threshold: 4.5
+    hex_threshold: 3.0
+    min_length: 20
+```
+
+Rules live in [analysis/secrets.py](src/reconecoboost/analysis/secrets.py):
+- **~34 precise provider regexes** ([gitleaks](https://github.com/gitleaks/gitleaks)
+  lineage): AWS, Google, GitHub, OpenAI, Anthropic, GitLab, npm, Stripe, Slack,
+  Square, Shopify, PyPI, Postman, Telegram, Discord, Mailchimp, Twilio, private
+  keys, JWTs, …
+- a **broad keyword-assignment rule** (~100 provider keywords from
+  [h4x0r-dz/Leaked-Credentials](https://github.com/h4x0r-dz/Leaked-Credentials),
+  matched as `keyword … = "value"`).
+- optional **Shannon-entropy detection** ([detect-secrets](https://github.com/Yelp/detect-secrets)
+  / [trufflehog](https://github.com/trufflesecurity/trufflehog) style) for
+  unknown/custom secrets that match no regex.
+
+Add your own `SecretRule` entries freely; a `_DENY` list filters obvious
+placeholders to cut false positives. (A future option: trufflehog-style **live
+verification** — checking a key against the provider API — which is active, so
+it'd be opt-in.)
+
+### JS intelligence (leaklens `--js-intel`, deterministic)
+
+`js_intel` mines the same fetched JavaScript for **more attack surface** — things
+crawling/fuzzing never reach because they're only referenced inside JS:
+
+- **Endpoints / API paths** (`fetch("/api/v2/users")`) → new `url` assets
+- **Hosts / subdomains** referenced in JS → in-scope ones become `subdomain` assets
+- **Cloud storage URLs** (S3/GCS/Azure) → `finding(kind="exposure")`
+- **Exposed source maps** (`//# sourceMappingURL=…`) → `finding`
+
+It reads the same bodies `js_fetch` cached (no extra requests). Discovered
+endpoints/subdomains land in the graph, so triage/AI/report see them (an internal
+API or staging host found only in JS becomes a top target). **No LLM, zero
+tokens.** Toggle and tune in [config/pipeline.yaml](config/pipeline.yaml):
+
+```yaml
+js_intel:
+  enabled: true        # turn this step on/off
+  max_per_file: 200    # cap endpoints extracted per file
+```
+
+(Note: it persists discovered assets but doesn't re-trigger upstream scans in the
+same run — by design, to avoid a discovery cycle. Re-run, or `--run-id`, to scan
+them deeper.)
 
 ### Triage — ranked "Top Targets" (deterministic, no LLM)
 

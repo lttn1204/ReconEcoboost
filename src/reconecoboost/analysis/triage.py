@@ -69,7 +69,8 @@ PATH_KEYWORDS: set[str] = {
 # Tags that guarantee an asset is included in the curated AI context, even if it
 # falls past the top-N cut — these are the high-value manual-testing leads.
 GUARANTEED_TAGS: set[str] = {
-    "method-anomaly", "dangerous-method", "sqli", "lfi", "ssrf", "redirect", "xss", "idor", "ssti",
+    "secret", "method-anomaly", "dangerous-method",
+    "sqli", "lfi", "ssrf", "redirect", "xss", "idor", "ssti",
 }
 
 DANGEROUS_METHODS: set[str] = {"PUT", "DELETE", "PATCH", "TRACE", "DEBUG", "CONNECT", "OPTIONS"}
@@ -79,6 +80,7 @@ DEFAULT_WEIGHTS: dict[str, int] = {
     "nuclei_critical": 100, "nuclei_high": 80, "nuclei_medium": 50, "nuclei_low": 25,
     "nuclei_info": 5,
     "method_anomaly": 60, "non_get_accepted": 45, "dangerous_method": 50,
+    "secret": 90,
     "param_vuln_class": 35, "has_param": 20,
     "path_keyword": 40, "auth_status": 15, "tech": 20,
     "catch_all": -50, "static": -30, "duplicate": -20,
@@ -216,6 +218,7 @@ def score_targets(
     urls: list[dict],
     findings: list[dict],
     *,
+    secrets: list[dict] | None = None,
     weights: dict | None = None,
     cluster_threshold: int = DEFAULT_CLUSTER_THRESHOLD,
     top_n: int = 0,
@@ -223,10 +226,15 @@ def score_targets(
     """Score hosts + urls. Inputs are dicts: {"key","attributes"}.
 
     findings: [{"severity","host","matched_at"}] (nuclei vulnerabilities).
+    secrets:  [{"url","rule"}] (exposed-secret findings from secret_scan).
     Returns the FULL ranked list (nothing removed); noise is demoted + grouped.
     """
     w = {**DEFAULT_WEIGHTS, **(weights or {})}
     fmap = _index_findings(findings)
+    secret_idx: dict[str, list[str]] = defaultdict(list)
+    for s in (secrets or []):
+        if s.get("url"):
+            secret_idx[s["url"]].append(s.get("rule") or "secret")
     scored: list[ScoredTarget] = []
 
     # hosts: every live subdomain root, boosted by nuclei findings + tech
@@ -257,6 +265,13 @@ def score_targets(
         t = ScoredTarget(key=key, kind="url", status=_primary_status(methods))
 
         has_finding = _apply_findings(t, fmap, w)
+
+        secret_rules = secret_idx.get(key)
+        if secret_rules:
+            t.score += w["secret"]
+            t.tags.append("secret")
+            t.reasons.append("exposed secret(s): " + ", ".join(sorted(set(secret_rules))))
+            has_finding = True  # protect from noise demotion
 
         non_get_ok, anomaly, dangerous = _method_signals(methods)
         if anomaly:

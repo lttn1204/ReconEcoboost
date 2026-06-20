@@ -52,21 +52,23 @@ class Triage(BaseModule):
                  for a in repo.list_assets(ctx.run_id, "host")]
         urls = [{"key": a["canonical_key"], "attributes": _attrs(a.get("attributes_json"))}
                 for a in repo.list_assets(ctx.run_id, "url")]
-        findings = []
+        findings, secrets = [], []
         for f in repo.list_findings(ctx.run_id):
-            if f.get("kind") != "vulnerability":
-                continue
             detail = _attrs(f.get("detail_json"))
-            findings.append({
-                "severity": f.get("severity"),
-                "host": detail.get("host"),
-                "matched_at": detail.get("matched_at"),
-            })
+            if f.get("kind") == "vulnerability":
+                findings.append({
+                    "severity": f.get("severity"),
+                    "host": detail.get("host"),
+                    "matched_at": detail.get("matched_at"),
+                })
+            elif f.get("kind") == "secret":
+                secrets.append({"url": detail.get("url"), "rule": detail.get("rule")})
 
         cfg = self._cfg(ctx)
         top_n = int(cfg.get("top_n", 25) or 25)
         res = score_targets(
             hosts, urls, findings,
+            secrets=secrets,
             weights=cfg.get("weights"),
             cluster_threshold=int(cfg.get("cluster_threshold", 5)),
         )

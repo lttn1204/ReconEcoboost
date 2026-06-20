@@ -18,13 +18,41 @@ triage:
   top_n: 25              # how many ranked targets to surface (report shortlist)
   cluster_threshold: 5  # >= N URLs sharing host+status+length => catch-all noise
   # weights:            # optional overrides (defaults in analysis/triage.py)
-  #   nuclei_critical: 100
   #   method_anomaly: 60
-  #   dangerous_method: 50
   #   param_vuln_class: 35
-  #   path_keyword: 40
+  #   secret: 90
   #   catch_all: -50
-  #   static: -30
+
+# Shared JS/JSON fetch: fetches bodies ONCE with httpx for both secret_scan and
+# js_intel (no duplicate requests). Selects URLs by extension OR live status.
+# Bodies cached under results/<run_id>/responses/.
+js_fetch:
+  enabled: true         # turn the whole JS-body fetch (and thus both consumers) on/off
+  extensions: [js, json, map, txt, xml, yml, yaml, env, config, bak]
+  scan_status: [200]    # ALSO fetch live URLs with these statuses (any extension);
+                        #   covers dir-fuzz + URL-history hits. [] = extensions only.
+  max_urls: 500         # cap how many URLs are fetched (omit/0 = no cap)
+  # timeout_s: 600
+
+# Secret scanning (leaklens-style): regex-scan the fetched bodies for exposed
+# secrets. Matches redacted before storage. results/<run_id>/secrets.{json,txt}.
+secret_scan:
+  # Shannon-entropy detection (detect-secrets/trufflehog style) — catches random
+  # secrets that match no regex. Higher recall + more false positives, so OFF by
+  # default; enable for deep audits and tune thresholds (base64 ~4.5, hex ~3.0).
+  entropy:
+    enabled: false
+    base64_threshold: 4.5
+    hex_threshold: 3.0
+    min_length: 20
+
+# JS intelligence (leaklens-style): mine endpoints/hosts/cloud-URLs/source-maps
+# from the fetched JS. Endpoints -> url assets, in-scope hosts -> subdomain assets
+# (feed triage/AI/report); cloud buckets + source maps -> findings.
+# Results saved to results/<run_id>/js_intel.{json,txt}.
+js_intel:
+  enabled: true         # turn this step on/off
+  max_per_file: 200     # cap endpoints extracted per file
 
 profiles:
   default:
@@ -37,6 +65,9 @@ profiles:
       - tech_fingerprint
       - dir_bruteforce
       - url_probe
+      - js_fetch
+      - secret_scan
+      - js_intel
       - nuclei_scan
       - normalization
       - triage
@@ -58,6 +89,9 @@ profiles:
       - tech_fingerprint
       - dir_bruteforce
       - url_probe
+      - js_fetch
+      - secret_scan
+      - js_intel
       - nuclei_scan
       - normalization
       - triage
