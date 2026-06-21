@@ -42,7 +42,18 @@ tools:
     # Per-method status/size is stored on each URL so the agent can spot
     # anomalies (e.g. TRACE/DEBUG enabled, POST allowed where GET is 403).
     # Each method multiplies the work, so add deliberately.
-    methods: ["GET","POST"]        # e.g. [GET, POST, HEAD, OPTIONS, PUT, DELETE, PATCH, TRACE, DEBUG]
+    methods: ["GET"]        # e.g. [GET, POST, HEAD, OPTIONS, PUT, DELETE, PATCH, TRACE, DEBUG]
+
+  dnsx:
+    binary: dnsx
+    rate_flag: "-rl"        # dnsx: DNS queries per second
+    rate_limit: null
+
+  alterx:
+    binary: alterx
+    version_args: ["-version"]   # alterx uses -version
+    # Permutation generator only (no network) — no request-rate flag. Resolution
+    # of its candidates is done by dnsx (which carries the rate limit).
 
   whatweb:
     binary: whatweb

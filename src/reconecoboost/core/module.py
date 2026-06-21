@@ -43,6 +43,10 @@ class BaseModule(ABC):
     parser: ClassVar[str | None] = None
     #: If ``True``, a failure here does not block dependent stages.
     optional: ClassVar[bool] = False
+    #: If ``True``, runs only once at the END of the discovery loop (findings /
+    #: analysis / expensive stages); ``False`` modules re-run each loop round.
+    #: Has no effect unless the discovery loop is enabled (discovery.loop).
+    run_once: ClassVar[bool] = False
 
     @abstractmethod
     def run(self, ctx: "Context") -> ModuleResult:

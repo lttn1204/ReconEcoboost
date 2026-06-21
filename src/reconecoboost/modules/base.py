@@ -16,6 +16,7 @@ records are dropped before persistence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 from ..core.errors import ToolNotFoundError
@@ -292,6 +293,25 @@ class ToolModule(BaseModule):
         if not rate or rate <= 0:
             return []
         return [flag, str(int(rate))]
+
+    def _extra_wordlist(self, ctx, name: str) -> list[str]:
+        """Read an optional extra wordlist from ``results/<run_id>/<name>.txt``.
+
+        This is the **AI seam**: deterministic brute/fuzz stages call this and
+        transparently consume words an AI stage may write later (e.g.
+        ``ai_subwords.txt`` / ``ai_dirwords.txt``). No file -> empty list, so the
+        seam is inert until an AI module populates it. Comment lines (``#``) and
+        blanks are skipped; entries are stripped.
+        """
+        results_dir = getattr(ctx, "results_dir", None)
+        if results_dir is None:
+            return []
+        path = Path(results_dir) / f"{name}.txt"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        return [w.strip() for w in lines if w.strip() and not w.startswith("#")]
 
     def _gather_inputs(self, ctx) -> list[str]:
         if self.input_type is None:

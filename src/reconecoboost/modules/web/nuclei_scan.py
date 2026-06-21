@@ -33,6 +33,7 @@ class NucleiScan(BaseModule):
     produces = ("finding",)
     tool = "nuclei"
     parser = None
+    run_once = True   # findings stage — runs once after the discovery loop
 
     def run(self, ctx) -> ModuleResult:
         result = ModuleResult(self.name)

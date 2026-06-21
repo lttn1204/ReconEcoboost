@@ -12,17 +12,16 @@ from reconecoboost.persistence import Database, Store
 
 
 # --- rule engine ----------------------------------------------------------
-def test_scan_detects_and_redacts():
+def test_scan_detects_full_value():
     aws_key = "AKIA" + "A" * 16          # AKIA + 16 chars
     goog_key = "AIza" + "A" * 35         # AIza + 35 chars
     text = f'var k="{aws_key}"; const g="{goog_key}";'
     found = {m.rule for m in scan_text(text)}
     assert "AWS Access Key ID" in found
     assert "Google API Key" in found
-    # the raw secret never survives — only a masked sample
+    # full secret is returned (pentest: verify quickly); redaction is opt-in
     aws = next(m for m in scan_text(text) if m.rule == "AWS Access Key ID")
-    assert aws_key not in aws.redacted
-    assert aws.redacted.startswith("AKIA")
+    assert aws.value == aws_key
 
 
 def test_scan_leaked_credential_keyword_list():
@@ -30,8 +29,8 @@ def test_scan_leaked_credential_keyword_list():
     text = 'cloudflare_api_key = "abcd1234efgh5678ijkl"; datadog_app_key: "ZZZ99887766554433aa"'
     rules = {m.rule for m in scan_text(text)}
     assert "Leaked Credential Assignment" in rules
-    found_values_safe = all("abcd1234efgh5678ijkl" not in m.redacted for m in scan_text(text))
-    assert found_values_safe  # value redacted
+    # full value is captured (for verification)
+    assert any(m.value == "abcd1234efgh5678ijkl" for m in scan_text(text))
     # placeholders still dropped even with the broad list
     assert scan_text('cloudflare_api_key = "your_api_key_here"') == []
 
@@ -111,9 +110,9 @@ def test_secret_scan_stores_findings_and_results(tmp_path):
     secrets = [f for f in store.list_findings(ctx.run_id) if f["kind"] == "secret"]
     assert len(secrets) == 1
     assert "GitHub Token" in secrets[0]["title"]
-    assert gh_token not in json.dumps(dict(secrets[0]))   # redacted
+    assert gh_token in json.dumps(dict(secrets[0]))   # full secret stored (pentest)
     assert (tmp_path / "secrets.json").exists()
-    assert "GitHub Token" in (tmp_path / "secrets.txt").read_text()
+    assert gh_token in (tmp_path / "secrets.txt").read_text()
     store.close()
 
 

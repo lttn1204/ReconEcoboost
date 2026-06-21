@@ -9,11 +9,19 @@ so the Normalizer/graph can wire the knowledge graph.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 
 from ...core.entities import Relation
 from ...engine.parser import ParsedRecord, Parser, register_parser
 from ..base import host_of, origin_of
+
+
+def _is_private_ip(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_private  # covers RFC1918 + loopback + link-local
+    except ValueError:
+        return False
 
 
 def _json_lines(raw: str):
@@ -72,6 +80,31 @@ class HttpxParser(Parser):
                     Relation("subdomain", sub, "resolves_to", "host", origin)
                 )
             records.append(record)
+        return records
+
+
+@register_parser
+class DnsxParser(Parser):
+    """dnsx ``-json -a -resp`` output: resolved hosts with their IP records.
+
+    Enriches the matching ``subdomain`` asset with ``resolved``, ``ip`` and an
+    ``internal`` flag (RFC1918/loopback). dnsx only emits resolving hosts, so a
+    record here means the name exists in DNS.
+    """
+
+    tool = "dnsx"
+
+    def parse(self, raw: str) -> list[ParsedRecord]:
+        records = []
+        for data in _json_lines(raw):
+            host = data.get("host")
+            ips = list(data.get("a") or []) + list(data.get("aaaa") or [])
+            if not host or not ips:
+                continue  # NODATA/NXDOMAIN (no A/AAAA) is not a resolving host
+            attrs = {"resolved": True, "ip": ips}
+            if any(_is_private_ip(ip) for ip in ips):
+                attrs["internal"] = True
+            records.append(ParsedRecord("subdomain", host.strip().lower(), attributes=attrs, tool="dnsx"))
         return records
 
 

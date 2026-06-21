@@ -67,16 +67,19 @@ module's `requires`/`produces`, not a hard-coded list.
 | Stage | Tool | Consumes → Produces | What it does |
 |---|---|---|---|
 | `asset_discovery` | subfinder | scope → subdomain | Enumerate subdomains (passive) |
-| `vhost_discovery` | ffuf | scope → subdomain | Fuzz the `Host:` header to find virtual hosts (wordlist: `vhosts`) |
-| `alive_detection` | httpx | subdomain → host | Probe which hosts answer HTTP |
+| `dns_resolve` | dnsx | subdomain → subdomain | Resolve + **DNS brute** (`word.<apex>`), attach IP(s), flag `internal`, filter wildcard (brute only on wildcard scope) |
+| `permutation` | alterx → dnsx | subdomain → subdomain | **Permute** known names (`api`→`api-dev`,`api2`,…) then resolve; keep resolving names (enumeration/wildcard only) |
+| `alive_detection` | httpx | subdomain → host | Probe which hosts answer HTTP (skips `internal` by default) |
+| `vhost_discovery` | ffuf | subdomain → host | Fuzz `Host:` over the **dnsx IP inventory** → DNS-less vhosts registered as live hosts (enumeration/wildcard only) |
 | `crawling` | katana | host → url, endpoint | Active crawl of live hosts |
 | `historical_urls` | gau | host → url | Pull historical URLs |
 | `tech_fingerprint` | whatweb | host → technology | Detect technologies |
 | `dir_bruteforce` | ffuf | host → url | Content/dir brute-force, per configured HTTP method (GET/POST/…) |
 | `url_probe` | httpx | url → url | Probe discovered URLs; record each one's status/size (for reports/AI) |
 | `js_fetch` | httpx | url → response bodies | Fetch discovered JS/JSON (and live URLs) **once**; cache bodies for the two consumers below |
-| `secret_scan` | regex | bodies → findings | Regex-scan cached bodies for exposed secrets (leaklens-style) → **redacted** `finding(kind="secret")` |
-| `js_intel` | regex | bodies → url/subdomain/findings | Mine endpoints/hosts/cloud-URLs/source-maps from cached JS (leaklens `--js-intel`); toggleable |
+| `secret_scan` | regex | bodies → findings | Regex-scan cached bodies for exposed secrets (leaklens-style) → **redacted** `finding(kind="secret")`; toggleable |
+| `js_intel` | regex | bodies → url/findings | Mine endpoints / cloud-URLs / source-maps from cached JS (leaklens `--js-intel`); toggleable |
+| `content_subdomains` | regex | bodies → subdomain | Extract in-scope subdomains referenced in HTML/JS/CSP (catches hosts brute/passive miss); toggleable, independent |
 | `nuclei_scan` | nuclei | host → findings | Template scan of **every live subdomain's host root** → **verified** `finding` rows |
 | `screenshot` | _(future: gowitness)_ | host → artifact | Optional, not wired in v1 |
 | `normalization` | — | url… → host links | Cross-tool consolidation |
@@ -322,10 +325,11 @@ network pass).
 over the bodies — AWS/GCP/GitHub/Slack/Stripe keys, private keys, JWTs, generic
 `api_key=…` assignments, etc. **No LLM, zero tokens.**
 
-Matches are **redacted before storage** — findings keep the rule, a masked sample
-(`ghp_…AA (40 chars)`), and the URL/line, never the raw secret. Each becomes a
-`finding(kind="secret")`, and triage promotes secret-bearing URLs into the
-curated AI context as guaranteed leads. Output:
+For pentest, findings store the **full secret value** (rule + value + URL/line) so
+you can verify it immediately. Set `secret_scan.redact: true` to mask it instead
+(`ghp_…AA (40 chars)`). Each becomes a `finding(kind="secret")`, and triage
+promotes secret-bearing URLs into the curated AI context as guaranteed leads.
+Output:
 
 - `results/<run_id>/secrets.txt` / `secrets.json`
 - a `finding(kind="secret")` per match (shown in the report)
@@ -389,6 +393,45 @@ js_intel:
 (Note: it persists discovered assets but doesn't re-trigger upstream scans in the
 same run — by design, to avoid a discovery cycle. Re-run, or `--run-id`, to scan
 them deeper.)
+
+### Content-driven subdomains (separate, toggleable)
+
+`content_subdomains` is its **own** step (independent of `js_intel`/`secret_scan`
+— turning any one off doesn't affect the others). It reads the same `js_fetch`
+bodies and regex-extracts **in-scope subdomains referenced in page content**
+(HTML links, `<script src>`, CSP headers, JSON) — both `https://x.apex` and bare
+`x.apex` — catching hosts that DNS/vhost brute and passive enum miss because the
+name is only *mentioned* somewhere. Saved to
+`results/<run_id>/content_subdomains.txt`.
+
+```yaml
+content_subdomains:
+  enabled: true
+```
+
+### Discovery loop (recursive, cross-module)
+
+By default the pipeline is a single pass, so subdomains found late (e.g. by
+`content_subdomains` or brute) are recorded but not re-fuzzed that run. Enable the
+**discovery loop** to feed them back recursively:
+
+```yaml
+# config/pipeline.yaml
+discovery:
+  loop:
+    enabled: false   # turn the loop on/off
+    rounds: 2        # max rounds (depth of the feedback loop)
+```
+
+When enabled, the **discovery/expansion** stages (asset_discovery, dns_resolve,
+alive_detection, vhost_discovery, crawling, historical_urls, tech_fingerprint,
+url_probe, js_fetch, content_subdomains) **re-run each round** — so a subdomain
+mentioned only in a page gets resolved → crawled → its content re-mined → which
+can surface more subdomains, and so on. **Findings/analysis** stages
+(dir_bruteforce, secret_scan, js_intel, nuclei_scan, normalization, triage, AI)
+run **once at the end** on the full asset set (no duplicate findings, AI billed
+once). The loop **stops early** when a round finds no new subdomain, and is
+bounded by `rounds`. Default off = single pass (unchanged behaviour).
 
 ### Triage — ranked "Top Targets" (deterministic, no LLM)
 
@@ -456,6 +499,98 @@ context_max_nodes: 60            # hard ceiling on nodes sent (incl. neighbors)
 
 Falls back to the full graph automatically when no triage ranking exists (e.g.
 `--run-id` on an older run), or set `context: full` to send everything.
+
+### Prompt versions (A/B-selectable)
+
+The AI stages' prompts are versioned so several sets can coexist and be swapped
+without code changes. Pick one in [config/ai.yaml](config/ai.yaml):
+
+```yaml
+prompt_version: v1   # v1 = original; v2 = research-tuned (see below)
+```
+
+- **v1** — [prompts/web/recon_intel.md](prompts/web/recon_intel.md), [pentest.md](prompts/web/pentest.md)
+- **v2** — [prompts/web/v2/](prompts/web/v2/): stronger role, per-vuln-class
+  playbook tied to the `_triage` tags, explicit severity/confidence rubric, a
+  few-shot example, and an anti-prompt-injection guardrail (treats graph data as
+  untrusted) — synthesized from [Vulnhuntr](https://github.com/protectai/vulnhuntr)
+  and [PentestGPT](https://github.com/GreyDGL/PentestGPT) prompt practice.
+
+Add more by creating `prompts/web/<version>/<name>.md` and setting
+`prompt_version`. Both sets emit the same JSON schema, so they're drop-in.
+
+### DNS resolution (dnsx)
+
+`dns_resolve` runs **dnsx** (after passive enum + vhost fuzz, before the HTTP
+probe) and does two things in one pass:
+
+1. **Resolve** the discovered subdomains — attach their **IP(s)**, flag
+   **`internal`** hosts (RFC1918/loopback — unreachable from outside; kept as
+   intel, not pentested), and **filter wildcard DNS** (`-wd`).
+2. **DNS brute-force** — generate `word.<apex>` from a wordlist and resolve them
+   too (the active brute the tool otherwise lacks). Only names that actually
+   resolve become subdomains. This is where AI-generated candidates plug in later.
+
+The resolved summary is saved to **`results/<run_id>/dns_resolve.txt`** (host →
+IPs, `[internal]` flagged). `alive_detection` then probes only the reachable
+ones (seed targets always probed). Configure in
+[config/pipeline.yaml](config/pipeline.yaml):
+
+```yaml
+dns_resolve:
+  wildcard_filter: true
+  brute:
+    enabled: true
+    wordlist: wordlists/dns/subdomains.txt   # swap for a bigger list anytime
+    # max_candidates: 100000
+alive_detection:
+  skip_internal: true     # don't HTTP-probe internal-only hosts (kept as intel)
+```
+
+dnsx is a [ProjectDiscovery](https://github.com/projectdiscovery/dnsx) Go binary
+(`go install …/dnsx/cmd/dnsx@latest`). If it's not installed the stage simply
+**skips** (the rest of the pipeline runs).
+
+`permutation` then goes beyond flat brute: it runs
+[alterx](https://github.com/projectdiscovery/alterx) to **mutate the naming
+patterns already in use** — given `api`/`dev`/`admin` it generates `api-dev`,
+`dev-api`, `api2`, `admin-uat`, … — and resolves the candidates with dnsx, keeping
+only names that resolve (with IP + `internal` flag, wildcard noise dropped).
+Unlike dns_resolve, **both alterx and dnsx are required** — a missing binary
+**fails** the stage. It only runs on a wildcard scope. The new names are crawled
+and probed only when `discovery.loop` is enabled; otherwise they're recorded for
+the report/AI. Saved to `results/<run_id>/permutation.txt`. Configure:
+
+```yaml
+permutation:
+  enabled: true
+  max_candidates: 5000   # cap candidates sent to dnsx
+```
+
+**AI seam.** Both `dns_resolve.brute` and `permutation` also read
+`results/<run_id>/ai_subwords.txt` (and `dir_bruteforce` reads
+`ai_dirwords.txt`) if present, folding those entries into their candidates. No
+file → no effect, so the seam is inert until a (future) AI stage writes it — the
+deterministic modules don't change when AI candidate generation is added.
+
+`vhost_discovery` then fuzzes `Host: FUZZ.<apex>` over the **IPs dnsx
+discovered** (deduped, internal skipped, capped by `max_ips`) plus the apex
+itself, to find **DNS-less vhosts** (sites served on an IP with no DNS record).
+A match is already live, so it's registered directly as a `host` (no second
+probe). It only runs when the scope enumerates (wildcard). Saved to
+`results/<run_id>/vhost.txt`. Configure:
+
+```yaml
+vhost_discovery:
+  enabled: true
+  schemes: [https, http]
+  auto_calibrate: true   # ffuf -ac: drop catch-all false positives
+  max_ips: 50
+```
+
+**Scope rule:** subdomain brute (`dns_resolve.brute`), `permutation` and
+`vhost_discovery` only run when the scope uses a wildcard (`*.domain`); an
+explicit exact-host scope skips all three — only the given hosts are touched.
 
 ### Rate limiting (requests/sec)
 

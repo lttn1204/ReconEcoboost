@@ -119,7 +119,7 @@ _DENY = re.compile(r"(?i)(example|sample|test|dummy|placeholder|your[_-]|changem
 class SecretMatch:
     rule: str
     severity: str
-    redacted: str
+    value: str      # the raw matched secret (redaction is applied later, if enabled)
     line: int
 
 
@@ -173,7 +173,7 @@ def scan_entropy(
             continue
         seen.add(val)
         line = text.count("\n", 0, m.start()) + 1
-        out.append(SecretMatch("High-Entropy String", "low", redact(val), line))
+        out.append(SecretMatch("High-Entropy String", "low", val, line))
         if len(out) >= max_findings:
             break
     return out
@@ -205,7 +205,7 @@ def scan_text(
                 continue
             seen.add(dedupe)
             line = text.count("\n", 0, m.start()) + 1
-            out.append(SecretMatch(rule.name, rule.severity, redact(raw), line))
+            out.append(SecretMatch(rule.name, rule.severity, raw, line))
             if len(out) >= max_findings:
                 return out
     if entropy:

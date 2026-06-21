@@ -12,11 +12,10 @@ from reconecoboost.persistence import Database, Store
 
 
 # --- extractor ------------------------------------------------------------
-def test_extract_endpoints_hosts_cloud_sourcemap():
+def test_extract_endpoints_cloud_sourcemap():
     js = (
         'fetch("/api/v2/internal/users");'
         'axios.post("/admin/delete-account");'
-        'const API="https://api-staging.example.com/v1";'
         'const CDN="company-backups.s3.amazonaws.com";'
         'img.src="/assets/logo.png";'           # static -> skipped
         '//# sourceMappingURL=main.js.map'
@@ -25,9 +24,9 @@ def test_extract_endpoints_hosts_cloud_sourcemap():
     assert "/api/v2/internal/users" in out.endpoints
     assert "/admin/delete-account" in out.endpoints
     assert "/assets/logo.png" not in out.endpoints       # media skipped
-    assert "api-staging.example.com" in out.hosts
     assert any("s3.amazonaws.com" in c for c in out.cloud)
     assert "main.js.map" in out.sourcemaps
+    assert not hasattr(out, "hosts")  # subdomain extraction moved to content_subdomains
 
 
 # --- module (reads bodies cached by js_fetch) -----------------------------

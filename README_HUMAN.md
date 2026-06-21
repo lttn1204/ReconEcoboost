@@ -1,6 +1,10 @@
 # ReconEcoboost
 
-## 1. How to use
+
+## 1. Flow 
+
+
+## 2. How to use
 
 ### Set scope
 Set scope in /config/scope.yaml:
@@ -17,11 +21,15 @@ Config in /config/tools.yaml:
 
     Set up what method use to fuzzing directory at methods
 
+    Set up which severity saved in nuclei 
+
 ### Wordlist
 
 Setup wordlist in /config/wordlists.yaml
 
     Can setup wordlist for fuzzing subdomain/vhost and directory
+
+    Set up dnsx wordlist
 
 ### Config data pass to agent in /config/ai.yaml
 
@@ -30,6 +38,8 @@ Setup wordlist in /config/wordlists.yaml
     ontext_scope: global -> only get top N target in all scope (in all subdomain)
 
     ontext_scope: per_host ->  get top N target per host in scope (scope has many subdomain)
+
+    prompt_version -> version promt use to promt agent
 
 ### ARGV Option
 
@@ -57,7 +67,26 @@ reconecoboost example.com --run --ai-mode analyze --run-id 123123123           #
 reconecoboost example.com --run --ai-mode pentest --run-id 123123123           # get result from 123123123 resultID and pentest
 ```
 
-## View result
+## Another Options on /config/pipeline.yaml
+
+#### DNS Resolve
+    dns_resolve: brute: enable:true -> Bruteforce resolve DNS
+    
+    dns_resolve: brute: depth -> brut force recursive. EX dept =2  -> subdomain of subdomain
+
+#### Secret Scan
+    js_intel:  enabled: true  -> scan secret and analyze, if found another url/uri (not discover from above tool) -> fetch and scan it too
+
+    js_intel:  enabled: false  -> only scan secret in url get from above tool
+
+
+#### content_subdomains
+    content_subdomains: true -> after fuzzing, fetch the content of discover url -> get new subdomain  -> Go back and scan that URL.
+    
+    Can configure scan loops or depth in discovery.
+
+
+## View result /result/\<id\>
 
     All result show run /result/<id>
 

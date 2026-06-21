@@ -106,6 +106,19 @@ def _prompt_manager(ctx) -> PromptManager:
     return PromptManager(Path(prompts_dir))
 
 
+def _prompt_name(ctx, name: str) -> str:
+    """Resolve a prompt name to the configured version (ai.prompt_version).
+
+    v1/default → ``recon_intel`` (prompts/web/recon_intel.md);
+    any other version → ``<version>/recon_intel`` (prompts/web/<version>/...).
+    Lets multiple prompt sets coexist and be A/B-selected via config.
+    """
+    version = str((ctx.config.ai or {}).get("prompt_version", "v1")).strip().lower()
+    if version in ("", "v1", "default"):
+        return name
+    return f"{version}/{name}"
+
+
 def _graph_payload(ctx) -> dict:
     nodes = {n.id: n for n in ctx.graph.nodes(ctx.run_id)}
     edges = ctx.graph.edges(ctx.run_id)
@@ -260,6 +273,7 @@ class AiReconIntel(BaseModule):
     produces = ("intel",)
     tool = None
     parser = None
+    run_once = True   # analysis — runs once after the discovery loop
 
     def run(self, ctx) -> ModuleResult:
         result = ModuleResult(self.name)
@@ -272,7 +286,7 @@ class AiReconIntel(BaseModule):
             return result
 
         prompt = _prompt_manager(ctx).render(
-            "web", "recon_intel",
+            "web", _prompt_name(ctx, "recon_intel"),
             {"graph": json.dumps(payload, sort_keys=True), "targets": _targets(ctx)},
         )
         response = ctx.ai.generate(prompt, schema=RECON_INTEL_SCHEMA)
@@ -322,6 +336,7 @@ class AiPentest(BaseModule):
     produces = ("vulnerability",)
     tool = None
     parser = None
+    run_once = True   # analysis — runs once after the discovery loop
 
     def run(self, ctx) -> ModuleResult:
         result = ModuleResult(self.name)
@@ -335,7 +350,7 @@ class AiPentest(BaseModule):
 
         prior = ctx.repository.list_findings(ctx.run_id)
         prompt = _prompt_manager(ctx).render(
-            "web", "pentest",
+            "web", _prompt_name(ctx, "pentest"),
             {
                 "graph": json.dumps(payload, sort_keys=True),
                 "intel": json.dumps(prior, sort_keys=True, default=str),

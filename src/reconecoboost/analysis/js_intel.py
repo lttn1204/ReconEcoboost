@@ -12,8 +12,6 @@ from dataclasses import dataclass, field
 
 # Quoted absolute paths: "/api/v2/users" — single leading slash, no spaces.
 _ENDPOINT = re.compile(r"""['"](/[A-Za-z0-9_\-./~%]{2,120})['"]""")
-# Hosts referenced via an absolute URL.
-_HOST = re.compile(r"https?://([A-Za-z0-9](?:[A-Za-z0-9\-.]{0,253}[A-Za-z0-9])?\.[A-Za-z]{2,24})")
 # Cloud storage URLs.
 _CLOUD = re.compile(
     r"(?:s3://[a-z0-9.\-]{3,}"
@@ -31,13 +29,16 @@ _SKIP_PATH_EXT = (".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".wof
 @dataclass
 class JsIntel:
     endpoints: list[str] = field(default_factory=list)   # absolute paths
-    hosts: list[str] = field(default_factory=list)        # referenced hostnames
-    cloud: list[str] = field(default_factory=list)         # cloud storage URLs
-    sourcemaps: list[str] = field(default_factory=list)    # exposed source maps
+    cloud: list[str] = field(default_factory=list)        # cloud storage URLs
+    sourcemaps: list[str] = field(default_factory=list)   # exposed source maps
 
 
 def extract(text: str, *, max_endpoints: int = 200) -> JsIntel:
-    """Pull endpoints, hosts, cloud URLs and source maps out of JS/JSON text."""
+    """Pull endpoints, cloud URLs and source maps out of JS/JSON text.
+
+    (Subdomain extraction is intentionally NOT here — it lives in the separate,
+    independently-toggleable ``content_subdomains`` module.)
+    """
     endpoints: list[str] = []
     seen: set[str] = set()
     for m in _ENDPOINT.finditer(text):
@@ -50,7 +51,6 @@ def extract(text: str, *, max_endpoints: int = 200) -> JsIntel:
         endpoints.append(path)
         if len(endpoints) >= max_endpoints:
             break
-    hosts = sorted({m.group(1).lower() for m in _HOST.finditer(text)})
     cloud = sorted({m.group(0) for m in _CLOUD.finditer(text)})
     sourcemaps = sorted({m.group(1) for m in _SOURCEMAP.finditer(text) if m.group(1)})
-    return JsIntel(endpoints=endpoints, hosts=hosts, cloud=cloud, sourcemaps=sourcemaps)
+    return JsIntel(endpoints=endpoints, cloud=cloud, sourcemaps=sourcemaps)

@@ -100,11 +100,43 @@ class Pipeline:
 
         A failing or not-yet-implemented module is recorded and the pipeline
         continues (fail loud, degrade gracefully — architecture doc 01).
+
+        With the discovery loop enabled (config ``pipeline.discovery.loop``),
+        the discovery/expansion modules re-run for up to ``rounds`` rounds so
+        subdomains found in page content (or by brute) get resolved, crawled and
+        re-mined recursively; ``run_once`` modules (findings/analysis) execute
+        once at the end.
         """
         log = get_logger("pipeline", run_id=ctx.run_id)
-        log.info("Running %d module(s): %s", len(self.order), self.describe())
+        rounds = self._loop_rounds(ctx)
 
-        for module in self.order:
+        if rounds <= 1:  # default: single pass in resolved order (unchanged)
+            log.info("Running %d module(s): %s", len(self.order), self.describe())
+            self._run_modules(ctx, self.order, log)
+            return ctx.results
+
+        cycle = [m for m in self.order if not getattr(m, "run_once", False)]
+        finalize = [m for m in self.order if getattr(m, "run_once", False)]
+        log.info("Discovery loop: up to %d round(s); cycle=[%s] finalize=[%s]",
+                 rounds, ", ".join(m.name for m in cycle), ", ".join(m.name for m in finalize))
+
+        prev = -1
+        for rnd in range(1, rounds + 1):
+            log.info("— discovery round %d/%d —", rnd, rounds)
+            self._run_modules(ctx, cycle, log)
+            count = self._subdomain_count(ctx)
+            if rnd == rounds or count == prev:
+                if count == prev and rnd < rounds:
+                    log.info("Discovery converged after round %d (%d subdomains).", rnd, count)
+                self._run_modules(ctx, finalize, log)
+                break
+            log.info("Round %d found %d subdomain(s) (was %d); continuing.", rnd, count, max(prev, 0))
+            prev = count
+
+        return ctx.results
+
+    def _run_modules(self, ctx, modules, log) -> None:
+        for module in modules:
             start = time.perf_counter()
             try:
                 result = module.run(ctx)
@@ -120,7 +152,24 @@ class Pipeline:
             result.duration_s = round(time.perf_counter() - start, 4)
             ctx.add_result(result)
 
-        return ctx.results
+    def _subdomain_count(self, ctx) -> int:
+        repo = getattr(ctx, "repository", None)
+        if repo is None:
+            return 0
+        try:
+            return len(repo.list_assets(ctx.run_id, "subdomain"))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @staticmethod
+    def _loop_rounds(ctx) -> int:
+        cfg = ((ctx.config.pipeline.get("discovery", {}) or {}).get("loop", {}) or {})
+        if not cfg.get("enabled", False):
+            return 1
+        try:
+            return max(1, int(cfg.get("rounds", 2)))
+        except (TypeError, ValueError):
+            return 1
 
     def describe(self) -> str:
         """Human-readable resolved order, e.g. ``a -> b -> c``."""

@@ -8,7 +8,53 @@ domain: web
 #   2   also scan subdomains-of-subdomains
 #   100 keep going until no new subdomains are found (bounded by this number)
 discovery:
-  recursive_depth: 5
+  recursive_depth: 1
+
+  # Cross-module discovery loop: re-run discovery/expansion stages so subdomains
+  # found in page content (content_subdomains) or by brute get resolved, crawled
+  # and re-mined recursively. Findings/analysis (nuclei, secret_scan, js_intel,
+  # normalization, triage, AI) run ONCE at the end. Stops early when no new
+  # subdomain appears. OFF by default (single pass = current behavior).
+  loop:
+    enabled: false
+    rounds: 2          # max rounds when enabled (depth of the feedback loop)
+
+# DNS resolution (dnsx): validate discovered subdomains, attach resolved IP(s),
+# flag `internal` (RFC1918/loopback), and filter wildcard-DNS false positives.
+# Also does active DNS brute-force: word.<apex> from a wordlist -> dnsx resolve.
+# Resolved summary saved to results/<run_id>/dns_resolve.txt.
+dns_resolve:
+  wildcard_filter: true   # use dnsx -wd to drop wildcard-DNS noise
+  brute:
+    enabled: true                          # generate word.<name> and resolve (wildcard scope only)
+    wordlist: wordlists/dns/subdomains.txt # swap for a bigger list any time
+    depth: 1                               # 1 = brute under apex+known subs; 2+ = recurse into found (sub-of-sub)
+    # max_candidates: 100000               # cap generated candidates per level (0/omit = all)
+
+# Subdomain permutation (alterx -> dnsx) — ENUMERATION stage, wildcard scope only.
+# Learns naming patterns from known subdomains and mutates them (api -> api-dev,
+# dev-api, api2, ...), then resolves the candidates with dnsx; only resolving
+# names are kept (with IP + `internal` flag), wildcard noise dropped. Both alterx
+# and dnsx are REQUIRED (a missing binary fails the stage). New names are crawled/
+# probed only when discovery.loop is enabled. Saved to results/<run_id>/permutation.txt.
+permutation:
+  enabled: true
+  max_candidates: 5000   # cap candidates sent to dnsx (0/omit = all alterx output)
+
+# Virtual-host fuzzing (ffuf) — ENUMERATION stage, so it only runs when the scope
+# enumerates (wildcard). Fuzzes Host: FUZZ.<apex> against each reachable IP dnsx
+# found (+ the apex), finds DNS-less vhosts, registers them directly as live
+# hosts. Results saved to results/<run_id>/vhost.txt.
+vhost_discovery:
+  enabled: true
+  schemes: [https, http]   # fuzz both
+  auto_calibrate: true     # ffuf -ac: drop catch-all false positives
+  max_ips: 50              # cap distinct IPs fuzzed (configurable)
+
+# alive_detection (httpx): skip subdomains that resolve to internal/unreachable
+# IPs (kept in the store as intel). Seed targets are always probed.
+alive_detection:
+  skip_internal: true
 
 # Deterministic triage (no LLM): ranks assets by signal and groups noise.
 # Inspired by uro (declutter), reNgine (interesting keywords), gf-patterns
@@ -54,11 +100,19 @@ js_intel:
   enabled: true         # turn this step on/off
   max_per_file: 200     # cap endpoints extracted per file
 
+# Subdomains referenced in page content (HTML/JS/CSP) — separate, toggleable step
+# (independent of js_intel). Reads the same js_fetch bodies, regex-extracts
+# in-scope subdomains of the apex, persists them. results/<run_id>/content_subdomains.txt
+content_subdomains:
+  enabled: true
+
 profiles:
   default:
     stages:
       - asset_discovery
       - vhost_discovery
+      - dns_resolve
+      - permutation
       - alive_detection
       - crawling
       - historical_urls
@@ -68,6 +122,7 @@ profiles:
       - js_fetch
       - secret_scan
       - js_intel
+      - content_subdomains
       - nuclei_scan
       - normalization
       - triage
@@ -92,6 +147,7 @@ profiles:
       - js_fetch
       - secret_scan
       - js_intel
+      - content_subdomains
       - nuclei_scan
       - normalization
       - triage

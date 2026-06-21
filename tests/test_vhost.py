@@ -47,7 +47,7 @@ def test_vhost_parser_emits_fuzz_keywords():
     assert parsed[0].attributes.get("status") == 200
 
 
-def test_vhost_module_builds_full_hostnames_and_command():
+def test_vhost_registers_matches_as_live_hosts(tmp_path):
     db = Database(":memory:")
     db.connect()
     db.initialize()
@@ -57,26 +57,50 @@ def test_vhost_module_builds_full_hostnames_and_command():
     scope = Scope(targets=["example.com"], in_scope=["*.example.com"])
     ctx = Context(
         domain=Domain.WEB, scope=scope, config=Config(),
-        executor=ex, tools=FakeTools(), repository=store,
+        executor=ex, tools=FakeTools(), repository=store, results_dir=tmp_path,
     )
     store.start_run(ctx)
 
     VhostDiscovery().run(ctx)
 
-    # FUZZ keywords were reconstructed into full hostnames and persisted
-    subs = {a["canonical_key"] for a in store.list_assets(ctx.run_id, "subdomain")}
-    assert subs == {"dev.example.com", "admin.example.com"}
+    # matched vhosts registered directly as live HOSTS (origins), not subdomains
+    hosts = {a["canonical_key"] for a in store.list_assets(ctx.run_id, "host")}
+    assert "https://dev.example.com" in hosts
+    assert "https://admin.example.com" in hosts
+    assert store.list_assets(ctx.run_id, "subdomain") == []  # no subdomain produced (avoids DAG cycle)
 
-    # the Host header was fuzzed for the target domain
+    # Host header fuzzed for the apex, auto-calibration on
     argv = ex.calls[0]
-    assert "-H" in argv
-    assert "Host: FUZZ.example.com" in argv
-    assert "-ac" in argv  # auto-calibration on
+    assert "Host: FUZZ.example.com" in argv and "-ac" in argv
+    # results summary written
+    assert "dev.example.com" in (tmp_path / "vhost.txt").read_text()
     store.close()
 
 
-def test_vhost_format_capture_is_readable():
-    out = VhostDiscovery().format_capture(_ffuf_vhost_json())
-    lines = [ln for ln in out.splitlines() if not ln.startswith("#")]
-    assert any("dev" in ln and "200" in ln for ln in lines)
-    assert '"results"' not in out  # not raw json
+def test_vhost_fuzzes_dnsx_ips_and_skips_internal(tmp_path):
+    from reconecoboost.engine import Normalizer, ParsedRecord
+
+    db = Database(":memory:")
+    db.connect()
+    db.initialize()
+    store = Store(db)
+    ex = FakeExecutor(_ffuf_vhost_json())
+    scope = Scope(targets=["example.com"], in_scope=["*.example.com"])
+    ctx = Context(
+        domain=Domain.WEB, scope=scope,
+        config=Config(pipeline={"vhost_discovery": {"schemes": ["https"]}}),
+        executor=ex, tools=FakeTools(), repository=store, results_dir=tmp_path,
+    )
+    store.start_run(ctx)
+    # dnsx-enriched subdomains: one public IP, one internal
+    store.persist_normalization(ctx.run_id, Normalizer().normalize([
+        ParsedRecord("subdomain", "a.example.com", attributes={"resolved": True, "ip": ["1.2.3.4"]}, tool="dnsx"),
+        ParsedRecord("subdomain", "b.example.com", attributes={"internal": True, "ip": ["10.0.0.9"]}, tool="dnsx"),
+    ]))
+
+    VhostDiscovery().run(ctx)
+
+    fuzzed = " ".join(" ".join(c) for c in ex.calls)
+    assert "https://1.2.3.4/" in fuzzed      # public IP fuzzed
+    assert "10.0.0.9" not in fuzzed          # internal IP skipped
+    store.close()

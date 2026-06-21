@@ -31,6 +31,7 @@ class DirBruteforce(ToolModule):
     produces = ("url",)
     tool = "ffuf"
     parser = "ffuf"
+    run_once = True   # expensive + writes findings — once after the discovery loop
     input_type = "host"
     output_ext = "txt"  # saved as a readable table, not ffuf's raw JSON blob
 
@@ -64,11 +65,36 @@ class DirBruteforce(ToolModule):
                 out.append(mu)
         return out or list(_DEFAULT_METHODS)
 
-    @staticmethod
-    def _wordlist(ctx) -> str:
+    def _wordlist(self, ctx) -> str:
         wordlists = ctx.config.wordlists.get("wordlists", {})
         entry = wordlists.get("directories") or wordlists.get("common") or {}
-        return entry.get("path", _DEFAULT_WORDLIST)
+        base = entry.get("path", _DEFAULT_WORDLIST)
+        extra = self._extra_wordlist(ctx, "ai_dirwords")   # AI seam (Phase 0)
+        if not extra:
+            return base
+        return self._merged_wordlist(ctx, base, extra)
+
+    def _merged_wordlist(self, ctx, base: str, extra: list[str]) -> str:
+        """Write base ∪ AI-suggested paths to one file ffuf can consume.
+
+        ffuf takes a single ``-w`` file per keyword, so AI words are merged with
+        the base list (deduped, order-preserving) into ``results/<run_id>/
+        dir_wordlist_merged.txt``. Falls back to ``base`` if there's no results dir.
+        """
+        results_dir = getattr(ctx, "results_dir", None)
+        if results_dir is None:
+            return base
+        words: list[str] = []
+        try:
+            words += Path(base).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            pass
+        words += extra
+        merged = list(dict.fromkeys(w.strip() for w in words if w.strip()))
+        path = Path(results_dir) / "dir_wordlist_merged.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(merged) + "\n", encoding="utf-8")
+        return str(path)
 
     # -- fold per-method results for the same URL into one record ----------
 

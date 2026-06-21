@@ -1,0 +1,19 @@
+# Starter DNS subdomain brute wordlist (common labels). Swap for a bigger list
+# (e.g. n0kovo, dnscan, jhaddix all.txt) via config dns_resolve.brute.wordlist.
+www
+mail
+remote
+blog
+webmail
+server
+ns1
+ns2
+smtp
+secure
+vpn
+api
+api-dev
+api-staging
+api-prod
+elearning
+biz

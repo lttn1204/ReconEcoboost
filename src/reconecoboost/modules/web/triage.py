@@ -39,6 +39,7 @@ class Triage(BaseModule):
     # after collection (host/url), nuclei (finding) and normalization (normalized)
     requires = ("host", "url", "finding", "normalized")
     produces = ("triage",)
+    run_once = True   # ranking over final assets — once after the discovery loop
     tool = None
     parser = None
 

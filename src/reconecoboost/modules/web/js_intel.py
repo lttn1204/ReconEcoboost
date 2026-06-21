@@ -4,13 +4,13 @@ leaklens-style ``--js-intel`` as a separate, toggleable module (config
 ``js_intel.enabled``). Bodies are fetched once by ``js_fetch``; this stage reads
 them and runs ``analysis.js_intel``, then:
 
-* persists discovered **endpoints** as ``url`` assets and in-scope **hosts** as
-  ``subdomain`` assets — so they show up in the graph / triage / AI / report;
+* persists discovered **endpoints** as ``url`` assets — so they show up in the
+  graph / triage / AI / report;
 * emits ``finding`` rows for **cloud buckets** and exposed **source maps**.
 
-It declares ``produces=("finding",)`` only (not url/subdomain) on purpose: the
-discovered assets are persisted directly, but declaring them would create a DAG
-cycle (subdomain → alive → crawl → js_fetch → js_intel → subdomain). Zero tokens.
+Subdomain extraction lives in the separate ``content_subdomains`` module (toggle
+it independently). js_intel declares ``produces=("finding",)`` only (url is
+persisted directly) to avoid a DAG cycle. Zero tokens.
 """
 
 from __future__ import annotations
@@ -40,9 +40,10 @@ class JsIntel(BaseModule):
     domain = Domain.WEB
     stage = Stage.COLLECTION
     requires = ("response",)   # bodies fetched by js_fetch
-    produces = ("finding",)    # url/subdomain persisted directly (avoid DAG cycle)
+    produces = ("finding",)    # url persisted directly (avoid DAG cycle)
     tool = None
     parser = None
+    run_once = True   # findings stage — runs once after the discovery loop
 
     def run(self, ctx) -> ModuleResult:
         result = ModuleResult(self.name)
@@ -64,9 +65,8 @@ class JsIntel(BaseModule):
         produced = self._persist(ctx, intel)
         self._write_results(ctx, intel)
         get_logger("module.js_intel", run_id=ctx.run_id).info(
-            "js_intel: %d body(ies), %d endpoint(s), %d host(s), %d cloud, %d sourcemap(s)",
-            len(bodies), len(intel["endpoints"]), len(intel["hosts"]),
-            len(intel["cloud"]), len(intel["sourcemaps"]),
+            "js_intel: %d body(ies), %d endpoint(s), %d cloud, %d sourcemap(s)",
+            len(bodies), len(intel["endpoints"]), len(intel["cloud"]), len(intel["sourcemaps"]),
         )
         result.status = ModuleStatus.SUCCESS
         result.produced = produced
@@ -78,7 +78,6 @@ class JsIntel(BaseModule):
     def _extract(self, ctx, bodies: list[tuple[str, str]]) -> dict:
         max_per_file = int(self._spec(ctx).get("max_per_file", 200) or 200)
         endpoints: dict[str, str] = {}   # full_url -> origin
-        hosts: set[str] = set()
         cloud: set[str] = set()
         sourcemaps: dict[str, str] = {}
         for url, body in bodies:
@@ -86,13 +85,11 @@ class JsIntel(BaseModule):
             found = extract(body, max_endpoints=max_per_file)
             for path in found.endpoints:
                 endpoints[urljoin(origin + "/", path)] = origin
-            hosts.update(found.hosts)
             cloud.update(found.cloud)
             for sm in found.sourcemaps:
                 sourcemaps[urljoin(url, sm)] = origin
         return {
             "endpoints": [{"url": u, "origin": o} for u, o in endpoints.items()],
-            "hosts": sorted(hosts),
             "cloud": sorted(cloud),
             "sourcemaps": [{"url": u, "origin": o} for u, o in sourcemaps.items()],
         }
@@ -105,9 +102,6 @@ class JsIntel(BaseModule):
                 "url", ep["url"], tool="js_intel",
                 relations=[Relation("url", ep["url"], "belongs_to", "host", ep["origin"])],
             ))
-        for host in intel["hosts"]:
-            if ctx.scope.is_allowed(host):
-                records.append(ParsedRecord("subdomain", host, tool="js_intel"))
         if records:
             repo.persist_normalization(ctx.run_id, Normalizer().normalize(records))
 
@@ -132,7 +126,6 @@ class JsIntel(BaseModule):
         out.mkdir(parents=True, exist_ok=True)
         (out / "js_intel.json").write_text(json.dumps(intel, indent=2), encoding="utf-8")
         lines = ["# endpoints"] + [e["url"] for e in intel["endpoints"]]
-        lines += ["", "# hosts"] + intel["hosts"]
         lines += ["", "# cloud"] + intel["cloud"]
         lines += ["", "# source maps"] + [s["url"] for s in intel["sourcemaps"]]
         (out / "js_intel.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

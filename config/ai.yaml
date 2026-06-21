@@ -41,6 +41,13 @@ context_max_nodes: 60           # hard ceiling on nodes sent (incl. neighbors), 
 prompts:
   dir: prompts
 
+# Which prompt set the AI stages use (lets several versions coexist; A/B them).
+#   v1  the original prompts  (prompts/web/recon_intel.md, pentest.md)
+#   v2  research-tuned set: stronger role, vuln-class playbook, severity/confidence
+#       rubric, few-shot example, anti-prompt-injection  (prompts/web/v2/*.md)
+# Add more by creating prompts/web/<version>/<name>.md and setting this.
+prompt_version: v1
+
 budget:
   max_tokens_per_run: null
 

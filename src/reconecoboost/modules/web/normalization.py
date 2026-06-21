@@ -27,6 +27,7 @@ class Normalization(BaseModule):
     produces = ("normalized",)
     tool = None
     parser = None
+    run_once = True   # consolidation — runs once after the discovery loop
 
     def run(self, ctx) -> ModuleResult:
         result = ModuleResult(self.name)

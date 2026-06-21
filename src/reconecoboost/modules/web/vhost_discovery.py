@@ -1,80 +1,144 @@
-"""Virtual-host discovery with ffuf (Host-header fuzzing).
+"""Virtual-host discovery with ffuf — fuzz Host over the dnsx IP inventory.
 
-A sibling of asset_discovery in the DISCOVERY stage: instead of passive
-enumeration, it fuzzes the ``Host:`` header against the target to find virtual
-hosts served from the same address. Discovered vhosts are emitted as
-``subdomain`` entities, so they flow into the rest of the pipeline exactly like
-subfinder results.
+Finds **DNS-less vhosts**: sites served on an IP via the ``Host:`` header with no
+public DNS record (staging/admin/origin sites). dnsx can't see these (nothing to
+resolve), so we fuzz ``Host: FUZZ.<apex>`` against:
 
-Example of "easy to add a tool": this is a self-contained module + a parser,
-with no changes to the engine, pipeline, graph, or storage.
+* every reachable IP that dnsx discovered (deduped, internal IPs skipped, capped
+  by ``max_ips``), and
+* the apex domain itself (so it still works when dnsx didn't run).
+
+A match means the server already answered for that Host, so the vhost is **live**
+— we register it directly as a ``host`` (no second probe, and producing ``host``
+instead of ``subdomain`` avoids a DAG cycle with dns_resolve). Runs only when the
+scope enumerates (it's an ENUMERATION stage, gated on a wildcard scope).
 """
 
 from __future__ import annotations
 
+import ipaddress
+import json
+from pathlib import Path
+
 from ...core.models import Domain, Stage
+from ...engine import ParsedRecord
 from ...orchestration.registry import register
 from ..base import ToolInvocation, ToolModule, host_of
-from .parsers import extract_ffuf_json
 
 _DEFAULT_WORDLIST = "wordlists/ffuf/vhosts.txt"
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 @register
 class VhostDiscovery(ToolModule):
     name = "vhost_discovery"
     domain = Domain.WEB
-    stage = Stage.DISCOVERY
-    requires = ()
-    produces = ("subdomain",)
+    stage = Stage.PROBING
+    requires = ("subdomain",)   # after asset_discovery + dns_resolve (needs IPs)
+    produces = ("host",)        # matched vhosts are already live -> host (no cycle)
     tool = "ffuf"
     parser = "ffuf_vhost"
-    input_type = None  # one fuzz pass per seed target domain
+    input_type = None           # frontier built from IP inventory, not the store directly
     output_ext = "txt"
-    recursive = True   # re-feed found vhosts as seeds (depth from config)
+    recursive = False
+
+    # -- frontier: scheme|target|apex combos --------------------------------
+
+    def _gather_inputs(self, ctx) -> list[str]:
+        if not self._spec(ctx).get("enabled", True):
+            return []
+        apexes: list[str] = []
+        for target in ctx.scope.targets:
+            host = host_of(target) or target
+            if host and host not in apexes:
+                apexes.append(host)
+
+        ips, seen = [], set()
+        if ctx.repository is not None:
+            for asset in ctx.repository.list_assets(ctx.run_id, "subdomain"):
+                try:
+                    attrs = json.loads(asset.get("attributes_json") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    attrs = {}
+                if attrs.get("internal"):
+                    continue
+                for ip in attrs.get("ip", []):
+                    if ip not in seen:
+                        seen.add(ip)
+                        ips.append(ip)
+        cap = int(self._spec(ctx).get("max_ips", 50) or 0)
+        if cap:
+            ips = ips[:cap]
+
+        schemes = self._spec(ctx).get("schemes", ["https", "http"])
+        combos: list[str] = []
+        for apex in apexes:
+            for target in [*ips, apex]:   # IP-based + name-based (no regression)
+                for scheme in schemes:
+                    combos.append(f"{scheme}|{target}|{apex}")
+        return combos
 
     def command(self, tool, item, ctx) -> ToolInvocation:
-        domain = host_of(item) or item
-        wordlist = self._wordlist(ctx)
-        return ToolInvocation(
-            tool.argv(
-                "-w", wordlist,
-                "-u", f"https://{domain}/",
-                "-H", f"Host: FUZZ.{domain}",
-                "-ic",            # ignore wordlist comments
-                "-ac",            # auto-calibrate — drop the catch-all baseline
-                "-of", "json",
-                "-o", "/dev/stdout",
-                "-s",
-            )
-        )
+        scheme, target, apex = item.split("|", 2)
+        args = [
+            "-w", self._wordlist(ctx),
+            "-u", f"{scheme}://{target}/",
+            "-H", f"Host: FUZZ.{apex}",
+            "-ic", "-of", "json", "-o", "/dev/stdout", "-s",
+        ]
+        if self._spec(ctx).get("auto_calibrate", True):
+            args.append("-ac")   # drop the catch-all baseline -> fewer false positives
+        return ToolInvocation(tool.argv(*args))
 
     def refine_records(self, ctx, item, records: list) -> list:
-        # Turn each matched FUZZ keyword into the full hostname FUZZ.<domain>.
-        domain = host_of(item) or item
+        """Turn matched FUZZ keywords into live `host` records (origin)."""
+        scheme, target, apex = item.split("|", 2)
+        out = []
         for record in records:
-            record.key = f"{record.key}.{domain}"
-        return records
+            host_key = f"{scheme}://{record.key}.{apex}"
+            attrs = {"vhost": True}
+            if record.attributes.get("status") is not None:
+                attrs["status_code"] = record.attributes["status"]
+            if record.attributes.get("length") is not None:
+                attrs["content_length"] = record.attributes["length"]
+            if _is_ip(target):
+                attrs["vhost_ip"] = target
+            out.append(ParsedRecord("host", host_key, attributes=attrs, tool="ffuf_vhost"))
+        return out
 
     def format_capture(self, raw_stdout: str) -> str:
-        """Readable table: one vhost candidate per line with status/size."""
-        if not raw_stdout.strip():
-            return ""
-        data = extract_ffuf_json(raw_stdout)
-        if data is None:
-            return raw_stdout
-        results = data.get("results", [])
-        lines = [f"# {len(results)} vhost candidate(s) | status  size  words  FUZZ"]
-        for r in sorted(results, key=lambda x: (x.get("status", 0), -(x.get("length", 0) or 0))):
-            fuzz = (r.get("input") or {}).get("FUZZ", "?")
-            lines.append(
-                f"  {str(r.get('status', '?')):>6}  {str(r.get('length', '?')):>9}  "
-                f"{str(r.get('words', '?')):>6}  {fuzz}"
-            )
-        return "\n".join(lines) + "\n"
+        return ""  # no per-invocation files; consolidated summary in after_persist
+
+    def after_persist(self, ctx, entities) -> None:
+        results_dir = getattr(ctx, "results_dir", None)
+        if results_dir is None:
+            return
+        rows = []
+        for e in entities:
+            attrs = e.attributes or {}
+            if e.asset_type != "host" or not attrs.get("vhost"):
+                continue
+            rows.append(f"{e.canonical_key}\tip={attrs.get('vhost_ip', 'name')}"
+                        f"\tstatus={attrs.get('status_code', '?')}\tsize={attrs.get('content_length', '?')}")
+        path = Path(results_dir) / "vhost.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {len(rows)} vhost(s) (DNS-less hosts found via Host fuzzing)\n"
+                        + "\n".join(sorted(rows)) + ("\n" if rows else ""), encoding="utf-8")
+
+    # -- config -------------------------------------------------------------
+
+    @staticmethod
+    def _spec(ctx) -> dict:
+        return (ctx.config.pipeline.get("vhost_discovery", {}) or {})
 
     @staticmethod
     def _wordlist(ctx) -> str:
-        wordlists = ctx.config.wordlists.get("wordlists", {})
-        entry = wordlists.get("vhosts") or {}
+        entry = (ctx.config.wordlists.get("wordlists", {}) or {}).get("vhosts") or {}
         return entry.get("path", _DEFAULT_WORDLIST)

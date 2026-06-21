@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ...analysis.secrets import scan_text
+from ...analysis.secrets import redact, scan_text
 from ...core.models import Domain, ModuleResult, ModuleStatus, Stage
 from ...core.module import BaseModule
 from ...logging.setup import get_logger
@@ -29,6 +29,7 @@ class SecretScan(BaseModule):
     produces = ("finding",)
     tool = None
     parser = None
+    run_once = True   # findings stage — runs once after the discovery loop
 
     def run(self, ctx) -> ModuleResult:
         result = ModuleResult(self.name)
@@ -62,12 +63,15 @@ class SecretScan(BaseModule):
             "hex_threshold": float(ent.get("hex_threshold", 3.0)),
             "entropy_min_length": int(ent.get("min_length", 20)),
         }
+        # For pentest the full secret is shown so it can be verified quickly.
+        # Set secret_scan.redact: true to mask it instead.
+        mask = bool(self._spec(ctx).get("redact", False))
         findings: list[dict] = []
         for url, body in bodies:
             for match in scan_text(body, **scan_kwargs):
                 findings.append({
                     "url": url, "rule": match.rule, "severity": match.severity,
-                    "redacted": match.redacted, "line": match.line,
+                    "match": redact(match.value) if mask else match.value, "line": match.line,
                 })
         return findings
 
@@ -78,7 +82,7 @@ class SecretScan(BaseModule):
                 title=f"{f['rule']} exposed in {f['url']}",
                 severity=f["severity"],
                 detail={"rule": f["rule"], "url": f["url"],
-                        "match_redacted": f["redacted"], "line": f["line"]},
+                        "match": f["match"], "line": f["line"]},
                 source="secret_scan",
             )
         return len(findings)
@@ -91,7 +95,7 @@ class SecretScan(BaseModule):
         out.mkdir(parents=True, exist_ok=True)
         (out / "secrets.json").write_text(json.dumps(findings, indent=2), encoding="utf-8")
         lines = [
-            f"[{f['severity'].upper()}] {f['rule']}  {f['url']}:{f['line']}  -> {f['redacted']}"
+            f"[{f['severity'].upper()}] {f['rule']}  {f['url']}:{f['line']}  -> {f['match']}"
             for f in findings
         ]
         (out / "secrets.txt").write_text(("\n".join(lines) + "\n") if lines else "(no secrets found)\n",
