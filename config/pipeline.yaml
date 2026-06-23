@@ -73,6 +73,21 @@ crawling:
   # field_scope: rdn     # dn | rdn | fqdn — katana default rdn; set fqdn to stay on the exact host
   # js_crawl: true       # katana -jc: parse endpoints out of JS while crawling
 
+# Directory brute-force (feroxbuster) — RECURSIVE content discovery. Finds nested
+# content (/admin/users, /api/v1/internal) a flat fuzz misses, tests every method in
+# one run, and auto-filters wildcard/catch-all responses. recursion.depth caps how
+# deep it descends (recursion can multiply work — raise carefully). match_status is
+# the "found"/recursable set (covers redirects + protected 401/403 dirs, not just 200).
+dir_bruteforce:
+  methods: [GET,POST]          # HTTP methods to test (feroxbuster -m, all in one run)
+  recursion:
+    enabled: true
+    depth: 2              # 0/disabled = flat; 1 = one level deeper (default, safe); 2+ = deeper (heavier)
+    force: false          # --force-recursion: recurse on EVERY found endpoint (incl 401/403), more aggressive
+  match_status: [200, 204, 301, 302, 307, 308, 401, 403, 405]  # statuses treated as found
+  extract_links: false    # feroxbuster link-extraction off (katana already crawls links)
+  # extensions: [php, bak, json]   # -x: also try these file extensions on each word
+
 # alive_detection (httpx): probes subdomains that pass the dns_resolve.prefer filter.
 # Internal-only hosts are skipped when prefer=public (default), or probed when
 # prefer=internal/both. Seeds are always probed.
@@ -84,7 +99,7 @@ alive_detection:
 # (per-vuln-class params) — but non-destructive: nothing is dropped, only
 # demoted/grouped. Results saved to results/<run_id>/triage.{json,txt}.
 triage:
-  top_n: 25              # how many ranked targets to surface (report shortlist)
+  top_n: 75              # how many ranked targets to surface (report shortlist)
   cluster_threshold: 5  # >= N URLs sharing host+status+length => catch-all noise
   # weights:            # optional overrides (defaults in analysis/triage.py)
   #   method_anomaly: 60

@@ -61,6 +61,14 @@ tools:
     rate_limit: null            # null = inherit defaults.rate_limit
     # Hidden-parameter discovery (param_discovery). Python tool: pipx/pip install arjun.
 
+  feroxbuster:
+    binary: feroxbuster
+    version_args: ["--version"]
+    rate_flag: "--rate-limit"   # feroxbuster: max requests/second
+    rate_limit: null            # null = inherit defaults.rate_limit
+    # Recursive directory brute-force (dir_bruteforce). Rust binary; install from
+    # github.com/epi052/feroxbuster releases (or apt/snap/cargo).
+
   whatweb:
     binary: whatweb
     # single-target fingerprint — no request-rate flag

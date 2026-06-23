@@ -22,8 +22,11 @@ from ..logging.setup import get_logger
 _log = get_logger("engine.executor")
 
 #: Flags whose following value is masked in logs (best-effort secret hygiene).
+#: NOTE: ``-u`` is intentionally NOT here — across our toolset (feroxbuster/katana)
+#: ``-u`` is the target URL, not curl-style credentials, so masking it would hide
+#: which target was scanned from the audit log.
 _SENSITIVE_FLAGS = frozenset(
-    {"-H", "--header", "-u", "--user", "-p", "--password", "--token", "--api-key", "--auth"}
+    {"-H", "--header", "--user", "-p", "--password", "--token", "--api-key", "--auth"}
 )
 _REDACTED = "***"
 

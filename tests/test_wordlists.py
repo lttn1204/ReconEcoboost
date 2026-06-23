@@ -66,7 +66,7 @@ def test_configured_wordlist_is_passed():
     argv = ex.calls[-1]
     assert "-w" in argv
     assert argv[argv.index("-w") + 1] == "wordlists/ffuf/directories.txt"
-    assert "-ic" in argv  # comment lines ignored
+    assert "--json" in argv  # feroxbuster JSON output to stdout
     store.close()
 
 

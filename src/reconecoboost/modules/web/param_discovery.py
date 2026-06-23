@@ -27,18 +27,21 @@ string so the existing triage param scoring picks them up with no triage change.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from ...analysis.params import mine_js_params, query_param_names
 from ...core.errors import ToolNotFoundError
 from ...core.models import Domain, ModuleResult, ModuleStatus, Stage
-from ...engine import PARSERS, Normalizer
+from ...engine import PARSERS, Normalizer, ParsedRecord
 from ...engine.executor import redact_argv
 from ...logging.setup import get_logger
 from ...orchestration.registry import register
-from ..base import ToolModule, host_of
+from ...core.entities import Relation
+from ..base import ToolModule, host_of, origin_of
 from .js_fetch import load_bodies
+from .parsers import bake_params
 
 #: Statuses we treat as a responding endpoint worth fuzzing for params.
 _LIVE_STATUSES = {200, 201, 202, 203, 204, 206, 301, 302, 303, 307, 308,
@@ -114,6 +117,10 @@ class ParamDiscovery(ToolModule):
 
         # Step 3: validate with arjun, one pass per configured method.
         records = self._fuzz(ctx, tool, engine, targets_path, wordlist_path, results_dir)
+        # Drop wildcard false-positives: on hosts that answer uniformly (SPA/redirect-
+        # everything), arjun reports the SAME param on every endpoint (even static
+        # files like robots.txt) — a param "valid" almost everywhere is noise, not a find.
+        records, wildcard = self._filter_wildcard_params(ctx, records)
         records = [r for r in records if self._record_in_scope(ctx, r)]
 
         produced = 0
@@ -122,6 +129,10 @@ class ParamDiscovery(ToolModule):
                 ctx.run_id, Normalizer().normalize(records))["assets"]
         self._write_results(results_dir, records, js_mined, reuse, ai, engine)
 
+        if wildcard:
+            log.warning("param_discovery: dropped %d wildcard-FP param(s) seen on most "
+                        "endpoints (uniform-response host): %s",
+                        len(wildcard), ", ".join(sorted(wildcard)))
         log.info(
             "param_discovery: %d endpoint(s), %d candidate(s) (%d js, %d reuse, %d ai) "
             "-> %d endpoint(s) with params",
@@ -130,8 +141,47 @@ class ParamDiscovery(ToolModule):
         result.status = ModuleStatus.SUCCESS
         result.produced = produced
         result.meta = {"endpoints": len(endpoints), "candidates": len(candidates),
-                       "with_params": len(records)}
+                       "with_params": len(records), "wildcard_dropped": sorted(wildcard)}
         return result
+
+    def _filter_wildcard_params(self, ctx, records: list) -> tuple[list, set]:
+        """Remove params that appear on >= ratio of endpoints (wildcard FPs).
+
+        Mirrors dir_bruteforce's catch-all detection: a param the host "accepts"
+        almost everywhere isn't a real per-endpoint parameter. Returns (kept records,
+        dropped param names). Disabled for tiny endpoint sets where the ratio is
+        meaningless. ``--stable`` on arjun reduces these upstream; this is the
+        deterministic backstop regardless of engine/flags.
+        """
+        spec = self._spec(ctx)
+        ratio = float(spec.get("wildcard_param_ratio", 0.8) or 0)
+        min_ep = int(spec.get("wildcard_min_endpoints", 4))
+        n = len(records)
+        if n < min_ep or ratio <= 0:
+            return records, set()
+        counts: Counter = Counter()
+        for r in records:
+            for p in set(r.attributes.get("discovered_params", [])):
+                counts[p] += 1
+        wildcard = {p for p, c in counts.items() if c / n >= ratio}
+        if not wildcard:
+            return records, set()
+        kept = []
+        for r in records:
+            params = [p for p in r.attributes.get("discovered_params", []) if p not in wildcard]
+            if not params:
+                continue   # this endpoint's only "params" were wildcard noise
+            endpoint = r.key.split("?", 1)[0]
+            method = r.attributes.get("param_method", "GET")
+            baked = bake_params(endpoint, params)
+            rec = ParsedRecord("url", baked,
+                               attributes={"discovered_params": params, "param_method": method},
+                               tool="arjun")
+            origin = origin_of(baked)
+            if origin:
+                rec.relations.append(Relation("url", baked, "belongs_to", "host", origin))
+            kept.append(rec)
+        return kept, wildcard
 
     # -- step 0: pick endpoints --------------------------------------------
 

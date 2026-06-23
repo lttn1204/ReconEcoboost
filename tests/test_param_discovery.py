@@ -200,6 +200,38 @@ def test_end_to_end_validates_persists_and_writes_results(tmp_path):
     store.close()
 
 
+def test_wildcard_param_dropped_across_endpoints(tmp_path):
+    # uniform-response host: arjun reports the SAME param on every endpoint (incl a
+    # static file) -> must be filtered as a wildcard false-positive.
+    store = _store()
+    arjun_out = {
+        "https://a.example.com/": {"method": "GET", "params": ["droptables"]},
+        "https://a.example.com/cp/": {"method": "GET", "params": ["droptables"]},
+        "https://a.example.com/login": {"method": "GET", "params": ["droptables"]},
+        "https://a.example.com/robots.txt": {"method": "GET", "params": ["droptables"]},
+        "https://a.example.com/api/user": {"method": "GET", "params": ["droptables", "id"]},
+    }
+    ex = ArjunFakeExecutor(arjun_out)
+    ctx = _ctx(store, tmp_path, ex, FakeTools(),
+               {"param_discovery": {"wordlist": str(tmp_path / "b.txt"),
+                                    "wildcard_min_endpoints": 4}})
+    (tmp_path / "b.txt").write_text("id\n", encoding="utf-8")
+    store.start_run(ctx)
+    store.persist_normalization(ctx.run_id, Normalizer().normalize([
+        ParsedRecord("url", f"https://a.example.com/p{i}", attributes={"status_code": 200}, tool="t")
+        for i in range(5)
+    ]))
+
+    result = ParamDiscovery().run(ctx)
+
+    assert "droptables" in result.meta["wildcard_dropped"]   # the FP is dropped
+    urls = {a["canonical_key"] for a in store.list_assets(ctx.run_id, "url")
+            if "=1" in a["canonical_key"]}
+    # only the genuine /api/user?id=1 survives (droptables stripped everywhere)
+    assert urls == {"https://a.example.com/api/user?id=1"}
+    store.close()
+
+
 def test_ai_params_seam_folds_into_wordlist(tmp_path):
     store = _store()
     (tmp_path / "ai_params.txt").write_text("vneid\nsoTaiKhoan\n", encoding="utf-8")

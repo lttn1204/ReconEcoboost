@@ -242,6 +242,45 @@ class FfufParser(Parser):
 
 
 @register_parser
+class FeroxbusterParser(Parser):
+    """feroxbuster ``--json --silent`` output: one JSON object per event.
+
+    Only ``type == "response"`` lines are real hits. Fields are mapped to the same
+    attribute names the ffuf parser used (status/length/words/redirectlocation +
+    method) so the existing per-method folding + per-host result files still work.
+    Recursion is handled by feroxbuster itself; recursed hits arrive as ordinary
+    response lines (deeper paths), so no extra handling is needed here.
+    """
+
+    tool = "feroxbuster"
+
+    def parse(self, raw: str) -> list[ParsedRecord]:
+        records = []
+        for data in _json_lines(raw):
+            if data.get("type") != "response":
+                continue
+            url = data.get("url")
+            if not url:
+                continue
+            attrs = {"method": data.get("method", "GET")}
+            if data.get("status") is not None:
+                attrs["status"] = data["status"]
+            if data.get("content_length") is not None:
+                attrs["length"] = data["content_length"]
+            if data.get("word_count") is not None:
+                attrs["words"] = data["word_count"]
+            location = (data.get("headers") or {}).get("location")
+            if location:
+                attrs["redirectlocation"] = location
+            record = ParsedRecord("url", url, attributes=attrs, tool="feroxbuster")
+            origin = origin_of(url)
+            if origin:
+                record.relations.append(Relation("url", url, "belongs_to", "host", origin))
+            records.append(record)
+        return records
+
+
+@register_parser
 class FfufVhostParser(Parser):
     """ffuf vhost output: each matched result's FUZZ keyword is a vhost prefix.
 
