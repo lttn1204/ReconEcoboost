@@ -102,8 +102,13 @@ class DnsxParser(Parser):
             if not host or not ips:
                 continue  # NODATA/NXDOMAIN (no A/AAAA) is not a resolving host
             attrs = {"resolved": True, "ip": ips}
-            if any(_is_private_ip(ip) for ip in ips):
-                attrs["internal"] = True
+            private = [ip for ip in ips if _is_private_ip(ip)]
+            if private and len(private) == len(ips):
+                attrs["internal"] = True       # only private IPs -> not externally reachable
+            elif private:
+                # Mixed: reachable on a public IP but DNS also leaks internal IPs
+                # (e.g. a GSLB returning RFC1918). Keep it probable AND flag the leak.
+                attrs["internal_ips"] = private
             records.append(ParsedRecord("subdomain", host.strip().lower(), attributes=attrs, tool="dnsx"))
         return records
 
@@ -261,6 +266,59 @@ class FfufVhostParser(Parser):
                 if item.get(key) is not None
             }
             records.append(ParsedRecord("subdomain", fuzz, attributes=attrs, tool="ffuf_vhost"))
+        return records
+
+
+def bake_params(url: str, params: list[str]) -> str:
+    """Append discovered param names to a URL's query string.
+
+    A placeholder value (``=1``) is used because triage's ``param_keys`` (and
+    ``parse_qs`` generally) DROP blank-valued params — ``?id=`` would be invisible.
+    The clean param-name list is kept in ``discovered_params`` for the report.
+    """
+    if not params:
+        return url
+    sep = "&" if "?" in url else "?"
+    return url + sep + "&".join(f"{p}=1" for p in params)
+
+
+@register_parser
+class ArjunParser(Parser):
+    """arjun ``-oJ`` JSON output: ``{url: {method, params:[...], headers}}``.
+
+    Each entry's discovered params are baked into the URL's query string so the
+    existing triage param scoring (param_keys / param_vuln_classes) picks them up
+    with no triage change. The raw param-name list + method are kept on attributes.
+    """
+
+    tool = "arjun"
+
+    def parse(self, raw: str) -> list[ParsedRecord]:
+        raw = (raw or "").strip()
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, dict):
+            return []
+
+        records = []
+        for url, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            params = [str(p) for p in (info.get("params") or []) if p]
+            if not params:
+                continue
+            method = info.get("method", "GET")
+            baked = bake_params(url, params)
+            attrs = {"discovered_params": params, "param_method": method}
+            record = ParsedRecord("url", baked, attributes=attrs, tool="arjun")
+            origin = origin_of(baked) or origin_of(url)
+            if origin:
+                record.relations.append(Relation("url", baked, "belongs_to", "host", origin))
+            records.append(record)
         return records
 
 

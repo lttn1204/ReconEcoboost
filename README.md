@@ -539,6 +539,7 @@ ones (seed targets always probed). Configure in
 ```yaml
 dns_resolve:
   wildcard_filter: true
+  # resolvers: ["1.1.1.1", "8.8.8.8"]   # omit => OS resolver (/etc/resolv.conf)
   brute:
     enabled: true
     wordlist: wordlists/dns/subdomains.txt   # swap for a bigger list anytime
@@ -550,6 +551,35 @@ alive_detection:
 dnsx is a [ProjectDiscovery](https://github.com/projectdiscovery/dnsx) Go binary
 (`go install …/dnsx/cmd/dnsx@latest`). If it's not installed the stage simply
 **skips** (the rest of the pipeline runs).
+
+**Resolvers.** dnsx defaults to *public* resolvers (1.1.1.1/8.8.8.8); on networks
+that block outbound UDP 53 to those it silently resolves **nothing** (while httpx,
+which uses the OS resolver, still works — so hosts look unresolved). To avoid this,
+`dns_resolve` and `permutation` point dnsx at the **system resolver** from
+`/etc/resolv.conf` by default. Override with `dns_resolve.resolvers` (a list); set
+it to `[]` to fall back to dnsx's own defaults.
+
+A host whose DNS returns a public IP **and** internal RFC1918 IPs (e.g. a GSLB
+leaking `10.x`) is treated as **reachable** (still probed); the leaked internal
+IPs are recorded under the asset's `internal_ips` as intel. Only hosts that
+resolve to *exclusively* private IPs are flagged `internal`.
+
+**Network position (`dns_resolve.prefer`).** Where you run from decides which IPs
+are reachable: from the internet only public IPs route, from inside the network
+internal IPs do too. This one knob is honoured by `alive_detection` (which hosts
+to probe) and `vhost_discovery` (which IPs to fuzz) — and since dir-brute runs on
+probed hosts, internal-only hosts then get fuzzed too:
+
+| `prefer`   | internal-only hosts | host with public **and** internal IPs |
+|---|---|---|
+| `public` *(default)* | skipped (kept as intel) | fuzz the **public** IP |
+| `internal` | **probed/fuzzed** | focus the **internal** IP |
+| `both` | **probed/fuzzed** | use **all** IPs |
+
+So to test from inside the network (internal hosts in scope), set
+`dns_resolve.prefer: internal` (or `both`). The legacy `alive_detection.skip_internal`
+still applies under `prefer: public` (set it `false` to probe internal-only hosts
+without switching position).
 
 `permutation` then goes beyond flat brute: it runs
 [alterx](https://github.com/projectdiscovery/alterx) to **mutate the naming

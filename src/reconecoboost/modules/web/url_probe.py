@@ -30,4 +30,7 @@ class UrlProbe(ToolModule):
     output_ext = "jsonl"
 
     def batch_command(self, tool, items, ctx) -> ToolInvocation:
-        return ToolInvocation(tool.argv("-silent", "-json"), input_text="\n".join(items))
+        spec = (ctx.config.pipeline.get("url_probe", {}) or {})
+        timeout = int(spec.get("timeout_s", 15))
+        return ToolInvocation(tool.argv("-silent", "-json", "-t", str(timeout)),
+                              input_text="\n".join(items))

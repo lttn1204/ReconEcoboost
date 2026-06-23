@@ -14,6 +14,7 @@ Resolving summary -> results/<run_id>/dns_resolve.txt.
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 
 from ...core.models import Domain, Stage
@@ -21,6 +22,96 @@ from ...orchestration.registry import register
 from ..base import ToolInvocation, ToolModule, host_of
 
 _DEFAULT_WORDLIST = "wordlists/dns/subdomains.txt"
+_RESOLV_CONF = "/etc/resolv.conf"
+
+
+def _system_resolvers() -> list[str]:
+    """Nameservers from /etc/resolv.conf (the resolver the OS — and httpx — uses)."""
+    try:
+        text = Path(_RESOLV_CONF).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("nameserver"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] not in out:
+                out.append(parts[1])
+    return out
+
+
+def dnsx_resolver_args(ctx) -> list[str]:
+    """`-r <ns,...>` for dnsx, shared by dns_resolve + permutation.
+
+    dnsx defaults to public resolvers (1.1.1.1/8.8.8.8); when outbound UDP 53 to
+    those is blocked (corporate/filtered networks) it silently resolves nothing
+    while httpx — which uses the OS resolver — still works. So we point dnsx at the
+    **system resolver** by default. Override with ``dns_resolve.resolvers`` (a list);
+    an empty list falls back to dnsx's own defaults.
+    """
+    dns_cfg = (ctx.config.pipeline.get("dns_resolve", {}) or {})
+    resolvers = dns_cfg.get("resolvers")
+    if resolvers is None:                       # not configured -> use the OS resolver
+        resolvers = _system_resolvers()
+    resolvers = [str(r).strip() for r in (resolvers or []) if str(r).strip()]
+    return ["-r", ",".join(resolvers)] if resolvers else []
+
+
+# --------------------------------------------------------------------------- #
+# Network position preference (public / internal / both)                        #
+# --------------------------------------------------------------------------- #
+# Hosts can resolve to public IPs, RFC1918 internal IPs, or both. Where you run
+# the tool decides which are reachable: from the internet only public IPs work;
+# from inside the network internal IPs work too. `dns_resolve.prefer` controls it
+# and is honoured by alive_detection (which hosts to probe) and vhost_discovery
+# (which IPs to fuzz):
+#   public   (default) probe public IPs; internal-only hosts skipped (kept as intel)
+#   internal probe everything; for hosts with both, focus on the internal IP
+#   both     probe everything; use all IPs
+
+
+def _is_private(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def network_preference(ctx) -> str:
+    pref = str((ctx.config.pipeline.get("dns_resolve", {}) or {}).get("prefer", "public")).strip().lower()
+    return pref if pref in ("public", "internal", "both") else "public"
+
+
+def _position(attrs: dict) -> tuple[bool, bool]:
+    """(has_public_ip, has_private_ip) for a resolved subdomain's attributes."""
+    ips = attrs.get("ip") or []
+    if ips:
+        has_priv = any(_is_private(ip) for ip in ips)
+        has_pub = any(not _is_private(ip) for ip in ips)
+        return has_pub, has_priv
+    if attrs.get("internal"):            # flagged internal-only, no ip list kept
+        return False, True
+    if attrs.get("internal_ips"):        # mixed: reachable publicly + leaks internal
+        return True, True
+    return True, False                   # unknown (e.g. content-discovered) -> treat reachable
+
+
+def host_reachable(attrs: dict, prefer: str) -> bool:
+    """Whether to actively probe this host given the network preference."""
+    has_pub, _has_priv = _position(attrs)
+    if prefer in ("internal", "both"):
+        return True      # positioned inside the network -> probe everything
+    return has_pub       # public preference: internal-only hosts aren't reachable
+
+
+def family_ips(ips: list[str], prefer: str) -> list[str]:
+    """The IP subset to actually target given the preference."""
+    if prefer == "both":
+        return list(ips)
+    priv = [ip for ip in ips if _is_private(ip)]
+    pub = [ip for ip in ips if not _is_private(ip)]
+    return priv if prefer == "internal" else pub
 
 
 @register
@@ -82,7 +173,7 @@ class DnsResolve(ToolModule):
         # NOTE: dnsx `-wd` is a special mode that ignores stdin/other flags and
         # produces no output for our use — do NOT use it. Plain resolve here;
         # wildcard filtering is done by us in refine_records.
-        argv = tool.argv("-silent", "-json", "-a")
+        argv = tool.argv("-silent", "-json", "-a") + dnsx_resolver_args(ctx)
         return ToolInvocation(argv, input_text="\n".join(uniq))
 
     def refine_records(self, ctx, item, records: list) -> list:

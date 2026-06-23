@@ -33,6 +33,7 @@ from ...engine.executor import redact_argv
 from ...logging.setup import get_logger
 from ...orchestration.registry import register
 from ..base import ToolModule, host_of
+from .dns_resolve import dnsx_resolver_args
 
 
 @register
@@ -130,7 +131,7 @@ class Permutation(ToolModule):
     def _resolve(self, ctx, dnsx, candidates: list[str]) -> list:
         probes = self._wildcard_probes(ctx)
         names = list(dict.fromkeys([*candidates, *sorted(probes)]))
-        argv = dnsx.argv("-silent", "-json", "-a") + self._rate_args(ctx)
+        argv = dnsx.argv("-silent", "-json", "-a") + dnsx_resolver_args(ctx) + self._rate_args(ctx)
         exec_result = ctx.executor.run(argv, timeout_s=self.timeout_s,
                                        input_text="\n".join(names))
         capture_path = self._write_capture_text(ctx, "permutation-dnsx", exec_result)

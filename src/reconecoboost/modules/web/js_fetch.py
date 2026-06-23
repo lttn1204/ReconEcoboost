@@ -109,8 +109,10 @@ class JsFetch(BaseModule):
 
         responses_dir = Path(results_dir) / "responses"
         responses_dir.mkdir(parents=True, exist_ok=True)
+        conn_timeout = int(spec.get("conn_timeout_s", 15))
         argv = (tool.argv("-silent", "-json", "-include-response",
-                          "-store-response", "-store-response-dir", str(responses_dir))
+                          "-store-response", "-store-response-dir", str(responses_dir),
+                          "-t", str(conn_timeout))
                 + self._rate_args(ctx))
         exec_result = ctx.executor.run(argv, input_text="\n".join(urls), timeout_s=spec.get("timeout_s"))
         ctx.repository.record_tool_run(

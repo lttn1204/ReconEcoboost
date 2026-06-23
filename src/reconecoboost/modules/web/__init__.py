@@ -8,6 +8,7 @@ replaceable.
 from . import parsers  # noqa: F401  (registers the v1 web parsers first)
 from . import (  # noqa: F401  (imported for registration side effects)
     alive_detection,
+    api_discovery,
     asset_discovery,
     content_subdomains,
     crawling,
@@ -18,6 +19,7 @@ from . import (  # noqa: F401  (imported for registration side effects)
     js_intel,
     normalization,
     nuclei_scan,
+    param_discovery,
     permutation,
     screenshot,
     secret_scan,

@@ -72,7 +72,16 @@ reconecoboost example.com --run --ai-mode pentest --run-id 123123123           #
 #### DNS Resolve
     dns_resolve: brute: enable:true -> Bruteforce resolve DNS
     
-    dns_resolve: brute: depth -> brut force recursive. EX dept =2  -> subdomain of subdomain
+    dns_resolve: brute: depth -> brute force recursive. EX dept =2  -> subdomain of subdomain
+
+    dns_resolve :prefer -> internal or public environment
+
+
+| `prefer`   | internal-only hosts | host with public **and** internal IPs |
+|---|---|---|
+| `public` *(default)* | skipped (kept as intel) | fuzz the **public** IP |
+| `internal` | **probed/fuzzed** | focus the **internal** IP |
+| `both` | **probed/fuzzed** | use **all** IPs |
 
 #### Secret Scan
     js_intel:  enabled: true  -> scan secret and analyze, if found another url/uri (not discover from above tool) -> fetch and scan it too

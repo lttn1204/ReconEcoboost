@@ -7,6 +7,7 @@ import json
 from ...core.models import Domain, Stage
 from ...orchestration.registry import register
 from ..base import ToolInvocation, ToolModule, host_of
+from .dns_resolve import host_reachable, network_preference
 
 
 @register
@@ -26,19 +27,18 @@ class AliveDetection(ToolModule):
         # Probe discovered subdomains AND the explicit seed targets — so the
         # targets are reached even when discovery is skipped (e.g. 'direct'
         # profile) or didn't surface them. Deduped, order preserved.
-        # Subdomains dnsx flagged `internal` (RFC1918/loopback) are skipped by
-        # default — they don't reach from outside, so probing wastes time; they
-        # stay in the store as intel. Seed targets are always probed.
-        skip_internal = bool((ctx.config.pipeline.get("alive_detection", {}) or {}).get("skip_internal", True))
+        # Which hosts are probed is governed solely by dns_resolve.prefer:
+        # public=skip internal-only hosts, internal/both=probe everything.
+        # Seeds are always probed.
+        prefer = network_preference(ctx)
         discovered: list[str] = []
         for asset in ctx.repository.list_assets(ctx.run_id, "subdomain"):
-            if skip_internal:
-                try:
-                    attrs = json.loads(asset.get("attributes_json") or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    attrs = {}
-                if attrs.get("internal"):
-                    continue
+            try:
+                attrs = json.loads(asset.get("attributes_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                attrs = {}
+            if not host_reachable(attrs, prefer):
+                continue
             discovered.append(asset["canonical_key"])
 
         seeds = [host_of(t) or t for t in ctx.scope.targets]
@@ -51,4 +51,7 @@ class AliveDetection(ToolModule):
         return out
 
     def batch_command(self, tool, items, ctx) -> ToolInvocation:
-        return ToolInvocation(tool.argv("-silent", "-json"), input_text="\n".join(items))
+        spec = (ctx.config.pipeline.get("alive_detection", {}) or {})
+        timeout = int(spec.get("timeout_s", 10))
+        return ToolInvocation(tool.argv("-silent", "-json", "-t", str(timeout)),
+                              input_text="\n".join(items))

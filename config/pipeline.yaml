@@ -25,6 +25,18 @@ discovery:
 # Resolved summary saved to results/<run_id>/dns_resolve.txt.
 dns_resolve:
   wildcard_filter: true   # use dnsx -wd to drop wildcard-DNS noise
+  # DNS resolvers for dnsx (used by dns_resolve AND permutation). Omit/null =>
+  # use the OS resolver from /etc/resolv.conf (dnsx's public-resolver defaults
+  # are silently empty when outbound UDP 53 is filtered). [] => dnsx defaults.
+  # resolvers: ["1.1.1.1", "8.8.8.8"]
+  #
+  # Network position — which resolved IPs are reachable from where you run this.
+  # Honoured by alive_detection (which hosts to probe) + vhost_discovery (which
+  # IPs to fuzz). Internal-only hosts then also flow into dir_bruteforce.
+  #   public   (default) only public IPs; internal-only hosts skipped (kept as intel)
+  #   internal probe everything; for hosts with both, focus the internal IP (run from inside)
+  #   both     probe everything; use all IPs
+  prefer: both
   brute:
     enabled: true                          # generate word.<name> and resolve (wildcard scope only)
     wordlist: wordlists/dns/subdomains.txt # swap for a bigger list any time
@@ -51,10 +63,21 @@ vhost_discovery:
   auto_calibrate: true     # ffuf -ac: drop catch-all false positives
   max_ips: 50              # cap distinct IPs fuzzed (configurable)
 
-# alive_detection (httpx): skip subdomains that resolve to internal/unreachable
-# IPs (kept in the store as intel). Seed targets are always probed.
+# Active crawl (katana). BOUNDED by default — katana otherwise crawls a host with
+# NO page/time limit, so a huge site (e.g. a Google property) streams gigabytes that
+# get buffered in memory and OOM-kill the run. Tune these for big authorized scopes.
+crawling:
+  depth: 3               # katana -d max crawl depth
+  max_domain_pages: 2000 # katana -mdp pages per domain (default is UNLIMITED — the OOM guard)
+  crawl_duration: 5m     # katana -ct hard time cap per host (s/m/h/d)
+  # field_scope: rdn     # dn | rdn | fqdn — katana default rdn; set fqdn to stay on the exact host
+  # js_crawl: true       # katana -jc: parse endpoints out of JS while crawling
+
+# alive_detection (httpx): probes subdomains that pass the dns_resolve.prefer filter.
+# Internal-only hosts are skipped when prefer=public (default), or probed when
+# prefer=internal/both. Seeds are always probed.
 alive_detection:
-  skip_internal: true
+  timeout_s: 15    # per-connection timeout (httpx -t); raise for slow/internal targets
 
 # Deterministic triage (no LLM): ranks assets by signal and groups noise.
 # Inspired by uro (declutter), reNgine (interesting keywords), gf-patterns
@@ -78,7 +101,42 @@ js_fetch:
   scan_status: [200]    # ALSO fetch live URLs with these statuses (any extension);
                         #   covers dir-fuzz + URL-history hits. [] = extensions only.
   max_urls: 500         # cap how many URLs are fetched (omit/0 = no cap)
-  # timeout_s: 600
+  conn_timeout_s: 15    # per-connection timeout (httpx -t); slow hosts (e.g. F5/BigIP
+                        #   ~8s) drop their body at httpx's 5s default -> missing secrets
+  # timeout_s: 600      # overall subprocess timeout for the whole batch (executor)
+
+# API discovery (httpx) — actively probe each live host for exposed OpenAPI/Swagger
+# specs (/openapi.json, /v2/api-docs, /swagger.json …) and GraphQL endpoints. A
+# readable spec is parsed into its endpoints+params (emitted as url assets so triage/
+# param_discovery/nuclei pick them up) + a finding; a reachable GraphQL endpoint is
+# flagged. Saved to results/<run_id>/api.{txt,json}.
+api_discovery:
+  enabled: true
+  max_hosts: 50         # cap live hosts probed
+  graphql: true         # also probe /graphql endpoints
+  http_timeout_s: 15    # httpx -t per-connection timeout (slow hosts)
+  timeout_s: 900        # whole-stage timeout
+  # extra_paths: ["/internal/openapi.json"]  # extra spec paths to probe
+
+# Hidden-parameter discovery (arjun) — find params endpoints accept but no link
+# reveals (IDOR/SQLi/SSRF surface). Runs AFTER js_fetch so it can mine candidate
+# param names from the already-fetched JS bodies (var/let/const, object keys, URL
+# params) + reuse param names seen on other URLs; merges them with arjun's built-in
+# 25k list + the ai_params AI seam, then validates per endpoint with arjun's
+# binary-search. Discovered params are baked into the URL so triage scores them.
+# Saved to results/<run_id>/params.{txt,json} (+ candidate/wordlist/target files).
+param_discovery:
+  enabled: true
+  engine: arjun         # arjun (default) | x8 (faster Rust drop-in, add to tools.yaml)
+  methods: [GET]        # GET / POST / JSON / XML — one arjun pass each (work multiplies)
+  max_urls: 50          # cap endpoints fuzzed (deduped by path; from LIVE urls). Param
+                        #   fuzzing is heavy on slow hosts — lower this if it times out.
+  timeout_s: 1800       # whole-stage timeout for arjun (default executor 600s is too low)
+  threads: 15           # arjun -t concurrent threads (latency-bound work parallelizes)
+  http_timeout_s: 15    # arjun -T per-request timeout (slow F5/BigIP hosts ~8s)
+  stable: false         # arjun --stable: more accurate but markedly slower; opt-in
+  # chunk_size: 256     # arjun -c params per request (omit = arjun auto)
+  # wordlist: ...       # base param wordlist (omit = arjun's built-in db/large.txt)
 
 # Secret scanning (leaklens-style): regex-scan the fetched bodies for exposed
 # secrets. Matches redacted before storage. results/<run_id>/secrets.{json,txt}.
@@ -114,12 +172,14 @@ profiles:
       - dns_resolve
       - permutation
       - alive_detection
+      - api_discovery
       - crawling
       - historical_urls
       - tech_fingerprint
       - dir_bruteforce
       - url_probe
       - js_fetch
+      - param_discovery
       - secret_scan
       - js_intel
       - content_subdomains
@@ -139,12 +199,14 @@ profiles:
   direct:
     stages:
       - alive_detection
+      - api_discovery
       - crawling
       - historical_urls
       - tech_fingerprint
       - dir_bruteforce
       - url_probe
       - js_fetch
+      - param_discovery
       - secret_scan
       - js_intel
       - content_subdomains

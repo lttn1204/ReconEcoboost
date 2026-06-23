@@ -71,6 +71,7 @@ class MarkdownReportWriter(ReportWriter):
 
         self._render_top_targets(report, add)
         self._render_findings(report, add)
+        self._render_params(report, add)
         self._render_assets(report, add)
         self._render_tool_runs(report, add)
 
@@ -118,6 +119,50 @@ class MarkdownReportWriter(ReportWriter):
                         add("  - Steps: " + "; ".join(str(s) for s in detail["steps"]))
                     if detail.get("targets"):
                         add("  - Targets: " + ", ".join(str(t) for t in detail["targets"]))
+            add("")
+
+    @staticmethod
+    def _render_params(report, add) -> None:
+        """Manual-test surface: ready-to-test URLs + exposed API specs/GraphQL.
+
+        Each parameterized endpoint is printed as a copy-paste URL with ``FUZZ``
+        marking each injectable point, so a human can test it directly (Burp/curl)
+        without a follow-up agent.
+        """
+        params = report.get("params", [])
+        findings = report.get("findings", {})
+        api_specs = findings.get("exposed_api_spec", [])
+        graphql = findings.get("graphql_endpoint", [])
+        if not (params or api_specs or graphql):
+            return
+
+        add("## Parameters & API Surface (for manual testing)")
+        add("")
+        if params:
+            add("### URLs with discovered parameter(s)")
+            for entry in sorted(params, key=lambda p: p.get("endpoint", "")):
+                ep = entry.get("endpoint", "")
+                names = entry.get("params", [])
+                if not names:
+                    continue
+                sep = "&" if "?" in ep else "?"
+                qs = "&".join(f"{n}=FUZZ" for n in names)
+                add(f"- [{entry.get('method', 'GET')}] `{ep}{sep}{qs}`")
+            add("")
+        if api_specs:
+            add("### Exposed API specs (Swagger/OpenAPI)")
+            for f in api_specs:
+                detail = f.get("detail") or {}
+                url = detail.get("url") or f.get("title", "")
+                n = detail.get("endpoints")
+                suffix = f" — {n} endpoint(s)" if n is not None else ""
+                add(f"- `{url}`{suffix}")
+            add("")
+        if graphql:
+            add("### GraphQL endpoints")
+            for f in graphql:
+                detail = f.get("detail") or {}
+                add(f"- `{detail.get('url') or f.get('title', '')}`")
             add("")
 
     @staticmethod

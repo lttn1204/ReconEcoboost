@@ -26,10 +26,20 @@ def build_report(store, graph, run_id: str) -> dict[str, Any]:
     scope = _parse(run.get("scope_json"), {})
 
     assets_by_type: dict[str, list[dict]] = {}
+    params: list[dict] = []
     for asset in store.list_assets(run_id):
         record = dict(asset)
         record["attributes"] = _parse(record.pop("attributes_json", None), {})
         assets_by_type.setdefault(record["asset_type"], []).append(record)
+        # Surface param_discovery results (url assets carrying discovered_params)
+        # as their own report section rather than buried in the url asset list.
+        discovered = record["attributes"].get("discovered_params")
+        if discovered:
+            params.append({
+                "endpoint": record["canonical_key"].split("?", 1)[0],
+                "method": record["attributes"].get("param_method", "GET"),
+                "params": discovered,
+            })
     asset_counts = {atype: len(items) for atype, items in assets_by_type.items()}
 
     findings_by_kind: dict[str, list[dict]] = {}
@@ -59,6 +69,7 @@ def build_report(store, graph, run_id: str) -> dict[str, Any]:
         "relations": relations,
         "finding_count": finding_count,
         "findings": findings_by_kind,
+        "params": params,
         "top_targets": top_targets,
         "tool_runs": tool_runs,
         "graph": graph_stats,

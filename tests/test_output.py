@@ -101,6 +101,56 @@ def test_markdown_writer_contains_sections():
     store.close()
 
 
+def test_report_has_discovered_params_section():
+    db = Database(":memory:")
+    db.connect()
+    db.initialize()
+    store = Store(db)
+    store.start_run(_Ctx())
+    store.persist_normalization(_Ctx.run_id, Normalizer().normalize([
+        ParsedRecord("url", "https://a.example.com/api/transfer?accountId=1&debug=1",
+                     attributes={"discovered_params": ["accountId", "debug"],
+                                 "param_method": "GET"}, tool="arjun"),
+    ]))
+    graph = SqliteKnowledgeGraph(db)
+    report = build_report(store, graph, _Ctx.run_id)
+
+    assert report["params"][0]["endpoint"] == "https://a.example.com/api/transfer"
+    assert report["params"][0]["params"] == ["accountId", "debug"]
+
+    md = MarkdownReportWriter().render(report)
+    assert "## Parameters & API Surface (for manual testing)" in md
+    # printed as a ready-to-test URL with FUZZ markers (not a bare param list)
+    assert "https://a.example.com/api/transfer?accountId=FUZZ&debug=FUZZ" in md
+    assert "[GET]" in md
+    store.close()
+
+
+def test_report_renders_api_specs_and_graphql_for_manual_test():
+    db = Database(":memory:")
+    db.connect()
+    db.initialize()
+    store = Store(db)
+    store.start_run(_Ctx())
+    store.add_finding(
+        _Ctx.run_id, kind="exposed_api_spec", title="Exposed API specification",
+        severity="medium", detail={"url": "https://a.example.com/openapi.json", "endpoints": 42},
+        source="api_discovery",
+    )
+    store.add_finding(
+        _Ctx.run_id, kind="graphql_endpoint", title="GraphQL endpoint reachable",
+        severity="low", detail={"url": "https://a.example.com/graphql"}, source="api_discovery",
+    )
+    graph = SqliteKnowledgeGraph(db)
+    md = MarkdownReportWriter().render(build_report(store, graph, _Ctx.run_id))
+
+    assert "### Exposed API specs (Swagger/OpenAPI)" in md
+    assert "https://a.example.com/openapi.json` — 42 endpoint(s)" in md
+    assert "### GraphQL endpoints" in md
+    assert "https://a.example.com/graphql" in md
+    store.close()
+
+
 def test_html_writer_wraps_content():
     store, graph = _seed()
     report = build_report(store, graph, _Ctx.run_id)

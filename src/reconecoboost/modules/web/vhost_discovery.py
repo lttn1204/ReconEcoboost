@@ -24,6 +24,7 @@ from ...core.models import Domain, Stage
 from ...engine import ParsedRecord
 from ...orchestration.registry import register
 from ..base import ToolInvocation, ToolModule, host_of
+from .dns_resolve import family_ips, network_preference
 
 _DEFAULT_WORDLIST = "wordlists/ffuf/vhosts.txt"
 
@@ -60,6 +61,11 @@ class VhostDiscovery(ToolModule):
             if host and host not in apexes:
                 apexes.append(host)
 
+        # Pick which IP family to fuzz from the network preference: public-only
+        # (default), internal-only, or both. From outside, internal IPs aren't
+        # routable, so the default drops them; set dns_resolve.prefer to include
+        # them when running from inside the network.
+        prefer = network_preference(ctx)
         ips, seen = [], set()
         if ctx.repository is not None:
             for asset in ctx.repository.list_assets(ctx.run_id, "subdomain"):
@@ -67,9 +73,7 @@ class VhostDiscovery(ToolModule):
                     attrs = json.loads(asset.get("attributes_json") or "{}")
                 except (json.JSONDecodeError, TypeError):
                     attrs = {}
-                if attrs.get("internal"):
-                    continue
-                for ip in attrs.get("ip", []):
+                for ip in family_ips(attrs.get("ip", []), prefer):
                     if ip not in seen:
                         seen.add(ip)
                         ips.append(ip)
