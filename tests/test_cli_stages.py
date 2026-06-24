@@ -12,6 +12,7 @@ from reconecoboost.cli.main import (
 ALL = [
     "asset_discovery", "alive_detection", "crawling", "historical_urls",
     "tech_fingerprint", "dir_bruteforce", "normalization",
+    "ai_subwords", "ai_dirwords", "ai_params",
     "ai_recon_intel", "ai_pentest",
 ]
 
@@ -19,13 +20,19 @@ ALL = [
 def test_mode_off_drops_all_ai_stages():
     out = _select_stages(None, ALL, "off")
     assert "normalization" in out
-    assert "ai_recon_intel" not in out
-    assert "ai_pentest" not in out
+    assert not any(s.startswith("ai_") for s in out)   # no AI of any kind
 
 
-def test_mode_analyze_keeps_only_intel():
+def test_mode_assist_keeps_only_wordlists():
+    out = _select_stages(None, ALL, "assist")
+    assert {"ai_subwords", "ai_dirwords", "ai_params"} <= set(out)
+    assert "ai_recon_intel" not in out and "ai_pentest" not in out
+
+
+def test_mode_analyze_keeps_intel_and_wordlists():
     out = _select_stages(None, ALL, "analyze")
     assert "ai_recon_intel" in out
+    assert "ai_subwords" in out          # wordlists run in analyze too
     assert "ai_pentest" not in out
 
 

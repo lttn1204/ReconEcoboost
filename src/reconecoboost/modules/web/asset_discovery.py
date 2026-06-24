@@ -14,7 +14,9 @@ class AssetDiscovery(ToolModule):
     domain = Domain.WEB
     stage = Stage.DISCOVERY
     requires = ()
-    produces = ("subdomain",)
+    # "passive_subdomains" is a marker (only this module produces it) so ai_subwords
+    # can order itself after passive enum but before dns_resolve without a cycle.
+    produces = ("subdomain", "passive_subdomains")
     tool = "subfinder"
     parser = "subfinder"
     input_type = None  # seeded from scope targets

@@ -5,12 +5,14 @@
 #                 be UNSET, or it bills the API instead of the subscription)
 #   stub         offline placeholder (no network)
 provider: claude-code
-model: sonnet                 # for claude-code use a CLI alias (sonnet|opus) or a full id
+model: opus                 # for claude-code use a CLI alias (sonnet|opus) or a full id
 
-# What the AI does after recon:
+# What the AI does:
 #   off      tools only — no AI is invoked
-#   analyze  compile recon intelligence (tech + sensitive cases) for manual pentest
-#   pentest  analyze, then AI-driven vulnerability hunting
+#   assist   ONLY the generative wordlists (ai_subwords/ai_dirwords/ai_params feed the
+#            brute stages) — NO post-run briefing / vuln hunting
+#   analyze  assist + compile recon intelligence (tech + sensitive cases) for manual pentest
+#   pentest  analyze + AI-driven vulnerability hunting
 # Override per run with --ai-mode, or disable with --no-ai.
 mode: analyze
 
@@ -46,7 +48,7 @@ prompts:
 #   v2  research-tuned set: stronger role, vuln-class playbook, severity/confidence
 #       rubric, few-shot example, anti-prompt-injection  (prompts/web/v2/*.md)
 # Add more by creating prompts/web/<version>/<name>.md and setting this.
-prompt_version: v1
+prompt_version: v2
 
 budget:
   max_tokens_per_run: null

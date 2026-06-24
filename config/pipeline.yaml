@@ -17,7 +17,7 @@ discovery:
   # subdomain appears. OFF by default (single pass = current behavior).
   loop:
     enabled: false
-    rounds: 2          # max rounds when enabled (depth of the feedback loop)
+    rounds: 1          # max rounds when enabled (depth of the feedback loop)
 
 # DNS resolution (dnsx): validate discovered subdomains, attach resolved IP(s),
 # flag `internal` (RFC1918/loopback), and filter wildcard-DNS false positives.
@@ -40,7 +40,7 @@ dns_resolve:
   brute:
     enabled: true                          # generate word.<name> and resolve (wildcard scope only)
     wordlist: wordlists/dns/subdomains.txt # swap for a bigger list any time
-    depth: 1                               # 1 = brute under apex+known subs; 2+ = recurse into found (sub-of-sub)
+    depth: 2                               # 1 = brute under apex+known subs; 2+ = recurse into found (sub-of-sub)
     # max_candidates: 100000               # cap generated candidates per level (0/omit = all)
 
 # Subdomain permutation (alterx -> dnsx) — ENUMERATION stage, wildcard scope only.
@@ -52,6 +52,35 @@ dns_resolve:
 permutation:
   enabled: true
   max_candidates: 5000   # cap candidates sent to dnsx (0/omit = all alterx output)
+
+# TLS cert SAN/CN subdomains (tlsx) — pulls every hostname a cert is valid for off
+# the known hosts; surfaces siblings DNS/passive missed. Out-of-scope SANs dropped.
+# Saved to results/<run_id>/tls_intel.txt.
+tls_intel:
+  enabled: true
+
+# GitHub code-search subdomains (github-subdomains) — mines subdomains leaked in
+# public GitHub code/configs. Needs a GitHub token: set env GITHUB_TOKEN, or put it
+# in config/tools.local.yaml (gitignored) as github_subdomains.token. No token => the
+# stage is SKIPPED. Saved to results/<run_id>/github_subdomains.txt.
+github_subdomains:
+  enabled: true
+  # token: ""            # prefer GITHUB_TOKEN env; this is a fallback (keep in *.local.yaml)
+
+# GitHub leaked-secret scan (trufflehog) — scans an org's / repos' GitHub history for
+# committed secrets, VERIFIED against the provider by default (cuts false positives).
+# Works per org/repo (NOT domain search), so set orgs/repos (or auto_org to guess the
+# org from the apex label). Needs GITHUB_TOKEN. No token / no org+repo => SKIPPED.
+# Findings -> kind "secret". Saved to results/<run_id>/github_secrets.{txt,json}.
+github_secrets:
+  enabled: true
+  orgs: []               # GitHub org name(s) to scan, e.g. ["lpbank"]
+  repos: []              # specific repos, e.g. ["org/repo"]
+  auto_org: false        # also guess org from the apex label (off — avoids scanning a stranger's org)
+  verify: true           # trufflehog verification (pings provider; set false to stay fully passive)
+  results: verified,unknown   # which result types to keep (verified|unknown|unverified, comma list)
+  redact: false          # store full secret value (true = mask it)
+  timeout_s: 1800        # whole-stage timeout (org scans can be large)
 
 # Virtual-host fuzzing (ffuf) — ENUMERATION stage, so it only runs when the scope
 # enumerates (wildcard). Fuzzes Host: FUZZ.<apex> against each reachable IP dnsx
@@ -179,21 +208,38 @@ js_intel:
 content_subdomains:
   enabled: true
 
+# Generative AI wordlists — ask the LLM for TARGET-SPECIFIC candidates and write them
+# to the Phase-0 seam files the brute stages already read (ai_subwords.txt feeds
+# dns_resolve+permutation, ai_dirwords.txt feeds dir_bruteforce, ai_params.txt feeds
+# param_discovery). Each runs where its best context exists (subwords early from
+# observed names, dirwords from crawled paths, params from fetched JS) and makes ONE
+# schema-constrained call. Inert when AI is off (--no-ai / ai-mode off). max_words caps
+# how many candidates each adds. Saved to results/<run_id>/ai_*.txt.
+ai_subwords: { enabled: true, max_words: 30 }
+ai_dirwords: { enabled: true, max_words: 30 }
+ai_params:   { enabled: true, max_words: 20 }
+
 profiles:
   default:
     stages:
       - asset_discovery
+      - github_subdomains
+      - ai_subwords
       - vhost_discovery
       - dns_resolve
       - permutation
+      - tls_intel
+      - github_secrets
       - alive_detection
       - api_discovery
       - crawling
       - historical_urls
+      - ai_dirwords
       - tech_fingerprint
       - dir_bruteforce
       - url_probe
       - js_fetch
+      - ai_params
       - param_discovery
       - secret_scan
       - js_intel

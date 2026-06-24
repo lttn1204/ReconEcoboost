@@ -119,7 +119,7 @@ class DnsResolve(ToolModule):
     name = "dns_resolve"
     domain = Domain.WEB
     stage = Stage.PROBING
-    requires = ("subdomain",)
+    requires = ("subdomain", "ai_subwords")   # ai_subwords = optional edge (only when AI on)
     produces = ("subdomain",)
     tool = "dnsx"
     parser = "dnsx"

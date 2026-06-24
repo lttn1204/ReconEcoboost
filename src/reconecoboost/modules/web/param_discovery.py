@@ -61,7 +61,7 @@ class ParamDiscovery(ToolModule):
     # so it must run AFTER js_fetch. Persists `url` assets directly but declares the
     # `param` sentinel instead of producing `url` — declaring `url` would cycle with
     # js_fetch/js_intel (same trick as permutation/content_subdomains/vhost).
-    requires = ("url", "response")
+    requires = ("url", "response", "ai_params")   # ai_params = optional edge (only when AI on)
     produces = ("param",)
     tool = "arjun"
     parser = "arjun"
@@ -296,14 +296,18 @@ class ParamDiscovery(ToolModule):
             exec_result = ctx.executor.run(argv, timeout_s=timeout)
             self._record_run(ctx, engine, argv, exec_result,
                              str(out_file) if out_file.exists() else None)
-            if not exec_result.ok:
-                if getattr(exec_result.status, "value", "") == "timeout":
-                    log.warning(
-                        "param_discovery: arjun -m %s timed out after %.0fs — lower "
-                        "param_discovery.max_urls or raise timeout_s for slow targets.",
-                        method, timeout,
-                    )
-                continue
+            if not exec_result.ok and getattr(exec_result.status, "value", "") == "timeout":
+                log.warning(
+                    "param_discovery: arjun -m %s timed out after %.0fs — lower "
+                    "param_discovery.max_urls or raise timeout_s for slow targets.",
+                    method, timeout,
+                )
+            elif not exec_result.ok:
+                # arjun can exit non-zero (e.g. target errors/rate-limits) yet still
+                # have written valid results — salvage the -oJ file if it has content.
+                log.warning("param_discovery: arjun -m %s exited %s — salvaging any "
+                            "results it wrote.", method, exec_result.exit_code)
+            # Read the JSON whatever the exit code, as long as arjun wrote something.
             try:
                 raw = out_file.read_text(encoding="utf-8")
             except OSError:

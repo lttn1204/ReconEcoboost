@@ -7,6 +7,7 @@ replaceable.
 
 from . import parsers  # noqa: F401  (registers the v1 web parsers first)
 from . import (  # noqa: F401  (imported for registration side effects)
+    ai_wordlists,
     alive_detection,
     api_discovery,
     asset_discovery,
@@ -14,6 +15,8 @@ from . import (  # noqa: F401  (imported for registration side effects)
     crawling,
     dir_bruteforce,
     dns_resolve,
+    github_secrets,
+    github_subdomains,
     historical_urls,
     js_fetch,
     js_intel,
@@ -24,6 +27,7 @@ from . import (  # noqa: F401  (imported for registration side effects)
     screenshot,
     secret_scan,
     tech_fingerprint,
+    tls_intel,
     triage,
     url_probe,
     vhost_discovery,

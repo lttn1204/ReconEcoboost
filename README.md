@@ -116,11 +116,18 @@ This installs the `reconecoboost` CLI.
 ```bash
 git clone <your-repo-url> && cd ReconEcoboost
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e .                       # installs the CLI + anthropic SDK
-cp config/scope.example.yaml config/scope.yaml   # then edit your scope
-# install the recon tools (below), set ANTHROPIC_API_KEY if using AI
+pip install -e .                       # CLI + anthropic SDK + arjun (Python tools)
+./scripts/install-tools.sh             # external Go/Rust binaries (idempotent)
+export PATH="$HOME/go/bin:$HOME/.local/bin:$PATH"   # where the binaries land
+cp config/scope.example.yaml config/scope.yaml      # then edit your scope
+reconecoboost example.com --preflight  # confirm every tool resolves
 reconecoboost --run
 ```
+
+> The **venv is not portable** — `.venv/` is gitignored and not relocatable across
+> machines. Each machine recreates it (`pip install -e .`, which also installs the
+> Python tool **arjun**) and installs the **external binaries** separately (they live
+> on `$PATH`, not in the venv). `./scripts/install-tools.sh` does the latter.
 
 For the AI step on your **subscription**, log in once (machine-level, not
 per-directory): run `claude` then `/login`. Leave `ANTHROPIC_API_KEY` unset.
@@ -144,36 +151,115 @@ tools:
 
 ### External recon tools
 
-Install the v1 tools and put them on your `PATH` (or set explicit paths in
-[config/tools.yaml](config/tools.yaml)):
+`./scripts/install-tools.sh` installs all of these (idempotent — skips what's
+already present). It needs **Go ≥1.21** (for the `go install` tools) and
+`curl`+`unzip` (for feroxbuster). Or install them yourself and put them on your
+`PATH` (or pin explicit paths in [config/tools.yaml](config/tools.yaml)):
 
 - [subfinder](https://github.com/projectdiscovery/subfinder),
   [httpx](https://github.com/projectdiscovery/httpx),
   [katana](https://github.com/projectdiscovery/katana),
+  [dnsx](https://github.com/projectdiscovery/dnsx),
+  [alterx](https://github.com/projectdiscovery/alterx),
+  [nuclei](https://github.com/projectdiscovery/nuclei),
   [gau](https://github.com/lc/gau),
   [ffuf](https://github.com/ffuf/ffuf),
-  [whatweb](https://github.com/urbanadventurer/WhatWeb),
-  [nuclei](https://github.com/projectdiscovery/nuclei)
+  [feroxbuster](https://github.com/epi052/feroxbuster),
+  [tlsx](https://github.com/projectdiscovery/tlsx),
+  [github-subdomains](https://github.com/gwen001/github-subdomains),
+  [trufflehog](https://github.com/trufflesecurity/trufflehog),
+  [whatweb](https://github.com/urbanadventurer/WhatWeb)
+- **arjun** (hidden-param discovery) is a Python tool — it's installed by
+  `pip install -e .`, so it's already in your venv (no separate step).
+- **GitHub token**: `github_subdomains` + `github_secrets` need `GITHUB_TOKEN`
+  (env var, or `*.local.yaml`). Without it those two stages skip.
 
-Check what's available for your selected pipeline:
+Binaries land in `~/go/bin` (Go tools) and `~/.local/bin` (feroxbuster); make sure
+both are on your `PATH`. Check what resolves for your selected pipeline:
 
 ```bash
 reconecoboost example.com --preflight
 ```
 
-Missing tools are reported and their stages are skipped gracefully — the rest of
-the pipeline still runs.
+Most missing tools are reported and their stages **skipped** gracefully. Two
+stages **hard-fail** on a missing binary (by design, so a gap is loud rather than
+silent): `permutation` (needs alterx + dnsx) and `param_discovery` (needs arjun).
 
 ### AI provider
 
-The default provider is **Claude**. Set your key:
+The AI stages (recon intel, AI pentest, and the generative `ai_subwords` /
+`ai_dirwords` / `ai_params` wordlists) need an AI backend. Pick one in
+[config/ai.yaml](config/ai.yaml) (`provider:`):
 
+| `provider` | Backend | Billing | Needs |
+|---|---|---|---|
+| `claude-code` *(default)* | the `claude` CLI, headless | your **Pro/Max subscription** | `claude` CLI + one-time `/login`, `ANTHROPIC_API_KEY` **unset** |
+| `claude` | Anthropic Messages API | **metered API** (per-token) | `ANTHROPIC_API_KEY` |
+| `stub` | offline placeholder | free | nothing (no network — for confidential runs/tests) |
+
+#### Option A — Pro/Max subscription (default, no per-token cost)
+
+Runs the AI through the `claude` CLI logged in with your subscription.
+
+```bash
+# 1. Install the Claude Code CLI. Standalone installer (NO npm/node needed):
+curl -fsSL https://claude.ai/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"          # add to ~/.bashrc to persist
+#   (alternative, if you prefer npm: npm install -g @anthropic-ai/claude-code)
+#   docs: https://docs.claude.com/claude-code
+
+# 2. Log in ONCE with your Anthropic account (machine-level, not per-project):
+claude          # opens the TUI → run:  /login   → finish in the browser
+#   verify:
+claude -p "say ok" --output-format json   # should return JSON, not an auth error
+
+# 3. CRITICAL: ANTHROPIC_API_KEY must be UNSET, or the CLI bills the API
+#    instead of your subscription:
+unset ANTHROPIC_API_KEY
+#    (check it's gone — also remove it from ~/.bashrc / .env / direnv if pinned)
+echo "${ANTHROPIC_API_KEY:-<unset, good>}"
+```
+
+`config/ai.yaml` already defaults to this:
+
+```yaml
+provider: claude-code
+model: sonnet      # CLI alias: sonnet | opus  (or a full model id)
+mode: analyze      # off | analyze | pentest  (override with --ai-mode)
+```
+
+Then just run — the AI stages use your subscription:
+
+```bash
+reconecoboost example.com --run                 # mode from ai.yaml (analyze)
+reconecoboost example.com --run --ai-mode pentest
+```
+
+#### Option B — Anthropic API key (metered)
+
+```yaml
+# config/ai.yaml
+provider: claude
+model: claude-opus-4-8
+```
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
+Here the key SHOULD be set (it's the billing path). The API enforces the output
+JSON schema natively; the subscription path requests JSON via the prompt instead
+(both are sanitized downstream, so either works).
 
-To run **without** any AI calls (offline, or for confidential engagements), use
-the stub provider (see §6).
+#### Option C — no AI (offline / confidential)
+
+```bash
+reconecoboost example.com --run --no-ai     # skip every AI stage, tools only
+```
+or set `provider: stub` / `mode: off` in `ai.yaml`. With AI off, the generative
+wordlist stages are inert and the deterministic brute stages run exactly as before.
+
+> **Gotcha recap:** subscription (`claude-code`) needs `ANTHROPIC_API_KEY` **unset**;
+> API (`claude`) needs it **set**. A stray key is the #1 reason a "subscription" run
+> silently bills the API.
 
 ---
 
@@ -722,15 +808,21 @@ Choose how much the AI does after recon, via `ai.mode` in
 | Mode | Stages run | What you get |
 |---|---|---|
 | `off` | recon only | tools only — no LLM invoked |
-| `analyze` | + `ai_recon_intel` | compiled recon intelligence (technologies, interesting endpoints, sensitive cases from bug-hunter experience) for **your manual analysis/pentest** |
-| `pentest` | + `ai_recon_intel` + `ai_pentest` | the above, then AI **vulnerability hunting** — concrete, testable hypotheses with steps |
+| `assist` | + `ai_subwords`/`ai_dirwords`/`ai_params` | AI generates target-specific wordlists that feed the brute stages (dns/dir/param) — **no post-run analysis** |
+| `analyze` | assist + `ai_recon_intel` | the wordlists, plus compiled recon intelligence (technologies, interesting endpoints, sensitive cases) for **your manual analysis/pentest** |
+| `pentest` | analyze + `ai_pentest` | the above, then AI **vulnerability hunting** — concrete, testable hypotheses with steps |
 
 ```bash
 reconecoboost example.com --run --ai-mode off       # tools only
-reconecoboost example.com --run --ai-mode analyze   # tools + recon intel
-reconecoboost example.com --run --ai-mode pentest   # tools + intel + AI pentest
+reconecoboost example.com --run --ai-mode assist    # tools + AI wordlists only (no analysis)
+reconecoboost example.com --run --ai-mode analyze   # + recon intel briefing
+reconecoboost example.com --run --ai-mode pentest   # + AI pentest
 reconecoboost example.com --run --no-ai             # alias for --ai-mode off
 ```
+
+> The generative wordlist AI (`ai_subwords`/`ai_dirwords`/`ai_params`) runs in
+> **assist, analyze, and pentest** — so any AI mode above `off` feeds the brute
+> stages. `assist` is the way to get *only* that, skipping the two analysis stages.
 
 **Analyze an already-scanned run (no recon re-run).** Point `--run-id` at an
 existing run to run *only* the AI stages against its stored data:

@@ -42,7 +42,7 @@ class DirBruteforce(ToolModule):
     name = "dir_bruteforce"
     domain = Domain.WEB
     stage = Stage.COLLECTION
-    requires = ("host",)
+    requires = ("host", "ai_dirwords")   # ai_dirwords = optional edge (only when AI on)
     produces = ("url",)
     tool = "feroxbuster"
     parser = "feroxbuster"

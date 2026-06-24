@@ -69,6 +69,23 @@ tools:
     # Recursive directory brute-force (dir_bruteforce). Rust binary; install from
     # github.com/epi052/feroxbuster releases (or apt/snap/cargo).
 
+  tlsx:
+    binary: tlsx
+    # NOTE: tlsx has NO requests/sec flag (only -c concurrency) — do NOT set a
+    # rate_flag here (it injected an invalid '-rl' → tlsx exit 2 / nonzero).
+    # TLS cert SAN/CN scraping (tls_intel) — ProjectDiscovery; `go install`.
+
+  github-subdomains:
+    binary: github-subdomains
+    # GitHub code-search subdomains (github_subdomains). Needs GITHUB_TOKEN.
+    # gwen001/github-subdomains; `go install`. No request-rate flag (GitHub API).
+
+  trufflehog:
+    binary: trufflehog
+    version_args: ["--version"]
+    # GitHub leaked-secret scan (github_secrets). Needs GITHUB_TOKEN.
+    # trufflesecurity/trufflehog; `go install` or release binary.
+
   whatweb:
     binary: whatweb
     # single-target fingerprint — no request-rate flag

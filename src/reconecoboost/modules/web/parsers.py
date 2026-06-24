@@ -362,6 +362,35 @@ class ArjunParser(Parser):
 
 
 @register_parser
+class TlsxParser(Parser):
+    """tlsx ``-san -cn -json`` output: subject alternative names + common name.
+
+    A TLS cert often lists every vhost/domain on an IP in its SAN list, so this
+    surfaces sibling subdomains DNS/passive enumeration missed. Wildcard entries
+    (``*.example.com``) are reduced to their apex; out-of-scope names are dropped
+    by the module's scope filter.
+    """
+
+    tool = "tlsx"
+
+    def parse(self, raw: str) -> list[ParsedRecord]:
+        records, seen = [], set()
+        for data in _json_lines(raw):
+            names = list(data.get("subject_an") or [])
+            cn = data.get("subject_cn")
+            if cn:
+                names.append(cn)
+            for name in names:
+                host = (name or "").strip().lower().lstrip("*.")
+                if not host or "." not in host or host in seen:
+                    continue
+                seen.add(host)
+                records.append(ParsedRecord("subdomain", host,
+                                            attributes={"source": "tls_san"}, tool="tlsx"))
+        return records
+
+
+@register_parser
 class WhatwebParser(Parser):
     """whatweb ``--log-json`` output: array of targets with detected plugins."""
 

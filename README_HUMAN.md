@@ -4,7 +4,21 @@
 ## 1. Flow 
 
 
-## 2. How to use
+## 2. Install 
+
+```bash
+git clone <your-repo-url> && cd ReconEcoboost
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .                       # CLI + anthropic SDK + arjun (Python tools)
+./scripts/install-tools.sh             # external Go/Rust binaries (idempotent)
+export PATH="$HOME/go/bin:$HOME/.local/bin:$PATH"   # where the binaries land
+cp config/scope.example.yaml config/scope.yaml      # then edit your scope
+reconecoboost example.com --preflight  # confirm every tool resolves
+reconecoboost --run
+```
+
+
+## 3. How to use
 
 ### Set scope
 Set scope in /config/scope.yaml:
@@ -18,8 +32,6 @@ Set scope in /config/scope.yaml:
 Config in /config/tools.yaml:
 
     Can setup rate limit for each tool
-
-    Set up what method use to fuzzing directory at methods
 
     Set up which severity saved in nuclei 
 
@@ -69,6 +81,11 @@ reconecoboost example.com --run --ai-mode pentest --run-id 123123123           #
 
 ## Another Options on /config/pipeline.yaml
 
+#### Use Agent
+
+    ai_subwords, ai_dirwords ai_params -> enable if use
+
+
 #### DNS Resolve
     dns_resolve: brute: enable:true -> Bruteforce resolve DNS
     
@@ -82,6 +99,11 @@ reconecoboost example.com --run --ai-mode pentest --run-id 123123123           #
 | `public` *(default)* | skipped (kept as intel) | fuzz the **public** IP |
 | `internal` | **probed/fuzzed** | focus the **internal** IP |
 | `both` | **probed/fuzzed** | use **all** IPs |
+
+
+#### github secret and subdomain scan
+
+    github_subdomains: enable or disable -> provide token github -> if not provide -> disable
 
 #### Secret Scan
     js_intel:  enabled: true  -> scan secret and analyze, if found another url/uri (not discover from above tool) -> fetch and scan it too

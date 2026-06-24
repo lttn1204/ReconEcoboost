@@ -32,13 +32,21 @@ from ..persistence import Store
 ENUMERATION_STAGES = ("asset_discovery", "vhost_discovery")
 
 #: All AI analysis stages.
-ALL_AI_STAGES = ("ai_recon_intel", "ai_pentest")
+#: Generative wordlist AI (feed the deterministic brute stages) — run whenever AI
+#: is on. Distinct from the end-of-run analysis AI (recon_intel/pentest).
+AI_WORDLIST_STAGES = ("ai_subwords", "ai_dirwords", "ai_params")
+ALL_AI_STAGES = ("ai_recon_intel", "ai_pentest", *AI_WORDLIST_STAGES)
 
 #: Which AI stages run in each mode.
+#   off      no AI at all
+#   assist   ONLY the generative wordlists (AI helps recon brute stages, no post-analysis)
+#   analyze  wordlists + recon-intel briefing
+#   pentest  wordlists + recon-intel + AI vuln hunting
 AI_STAGES_BY_MODE = {
     "off": (),
-    "analyze": ("ai_recon_intel",),
-    "pentest": ("ai_recon_intel", "ai_pentest"),
+    "assist": AI_WORDLIST_STAGES,
+    "analyze": ("ai_recon_intel", *AI_WORDLIST_STAGES),
+    "pentest": ("ai_recon_intel", "ai_pentest", *AI_WORDLIST_STAGES),
 }
 
 
@@ -137,10 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ai-mode",
-        choices=["off", "analyze", "pentest"],
+        choices=["off", "assist", "analyze", "pentest"],
         default=None,
-        help="off: tools only · analyze: + recon intel · pentest: + AI vuln hunting. "
-        "Overrides ai.mode in ai.yaml.",
+        help="off: tools only · assist: + AI wordlists only (no post-analysis) · "
+        "analyze: + recon intel · pentest: + AI vuln hunting. Overrides ai.mode in ai.yaml.",
     )
     parser.add_argument(
         "--enumerate",
