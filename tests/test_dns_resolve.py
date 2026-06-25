@@ -134,8 +134,12 @@ def test_dns_brute_generates_candidates_and_saves_results(tmp_path):
     result = DnsResolve().run(ctx)
 
     assert result.status == ModuleStatus.SUCCESS
-    # generated candidates were fed to dnsx (alongside the existing subdomain)
-    fed = set(ex.calls[0][1].split())
+    # brute candidates are streamed to a file and dnsx reads it with -l (not stdin),
+    # so the full wordlist runs without living in memory.
+    argv = ex.calls[0][0]
+    assert "-l" in argv
+    fed = set((tmp_path / "dns_candidates.txt").read_text().split())
+    # words are brute-forced against the APEX (example.com), plus the known sub is resolved
     assert {"dev.example.com", "api.example.com", "vpn.example.com", "www.example.com"} <= fed
     # only the resolving one became an asset
     subs = {a["canonical_key"] for a in store.list_assets(ctx.run_id, "subdomain")}

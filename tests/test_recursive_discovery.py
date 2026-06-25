@@ -57,25 +57,23 @@ def _run(depth):
     return keys, ex.domains_scanned, store
 
 
-def test_depth_1_no_recursion():
+# asset_discovery is PASSIVE (subfinder) and intentionally NON-recursive: re-running
+# subfinder on every found subdomain yields ~nothing new but multiplies runs
+# explosively (a depth-3 run on a big org hung the pipeline before validation).
+# Recursive sub-of-sub discovery is the job of ACTIVE brute (dns_resolve), tested in
+# test_dns_resolve.py, and the bounded discovery loop.
+def test_asset_discovery_scans_only_the_seed_at_depth_1():
     keys, scanned, store = _run(depth=1)
     assert "a.example.com" in keys
-    assert "b.a.example.com" not in keys     # not recursed into
-    assert scanned == ["example.com"]        # only the seed scanned
+    assert "b.a.example.com" not in keys
+    assert scanned == ["example.com"]
     store.close()
 
 
-def test_depth_2_one_level_of_recursion():
-    keys, scanned, store = _run(depth=2)
-    assert "a.example.com" in keys
-    assert "b.a.example.com" in keys
-    assert scanned == ["example.com", "a.example.com"]
-    store.close()
-
-
-def test_high_depth_runs_until_exhausted():
+def test_asset_discovery_does_not_recurse_even_at_high_depth():
+    # depth is ignored by passive enumeration — only the seed is ever scanned.
     keys, scanned, store = _run(depth=100)
-    # discovers a -> b.a, then b.a yields nothing and it stops (no infinite loop)
-    assert {"a.example.com", "b.a.example.com"} <= keys
-    assert scanned == ["example.com", "a.example.com", "b.a.example.com"]
+    assert "a.example.com" in keys
+    assert "b.a.example.com" not in keys     # NOT recursed despite depth 100
+    assert scanned == ["example.com"]        # subfinder ran exactly once (no explosion)
     store.close()

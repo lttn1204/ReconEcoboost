@@ -15,6 +15,8 @@ Resolving summary -> results/<run_id>/dns_resolve.txt.
 from __future__ import annotations
 
 import ipaddress
+import os
+import tempfile
 from pathlib import Path
 
 from ...core.models import Domain, Stage
@@ -125,17 +127,11 @@ class DnsResolve(ToolModule):
     parser = "dnsx"
     input_type = "subdomain"
     batch = True
-    recursive = True          # brute sub-of-sub across levels (depth from config)
+    # NOT recursive: brute targets the APEX (word.<apex>), so re-feeding found
+    # subdomains would just re-brute the same apex. Sub-of-sub expansion is handled
+    # by permutation (alterx) + the discovery loop, not by multiplying word×subs here.
+    recursive = False
     output_ext = "jsonl"
-
-    def _recursion_depth(self, ctx) -> int:
-        # Recursion only matters when brute is active; otherwise a single pass.
-        if not self._brute_active(ctx):
-            return 1
-        try:
-            return max(1, int(self._brute(ctx).get("depth", 1) or 1))
-        except (TypeError, ValueError):
-            return 1
 
     def _gather_inputs(self, ctx) -> list[str]:
         """Known names to resolve + brute under: discovered subdomains + apexes."""
@@ -149,32 +145,80 @@ class DnsResolve(ToolModule):
         return out
 
     def batch_command(self, tool, items, ctx) -> ToolInvocation:
-        names = list(items)
-        if self._brute_active(ctx):
-            words = self._load_words(self._brute(ctx))
-            words += self._extra_wordlist(ctx, "ai_subwords")   # AI seam (Phase 0)
-            generated = [f"{w}.{n}" for n in items for w in dict.fromkeys(words)]
-            cap = int(self._brute(ctx).get("max_candidates", 0) or 0)
-            if cap:
-                generated = generated[:cap]
-            names += generated
-
-        # Wildcard detection: add synthetic non-existent hosts; whatever IP they
-        # resolve to is the wildcard catch-all (filtered out in refine_records).
-        if self._spec(ctx).get("wildcard_filter", True):
-            names += sorted(self._wildcard_probes(ctx))
-
-        seen, uniq = set(), []
-        for n in names:
-            if n not in seen:
-                seen.add(n)
-                uniq.append(n)
-
         # NOTE: dnsx `-wd` is a special mode that ignores stdin/other flags and
         # produces no output for our use — do NOT use it. Plain resolve here;
         # wildcard filtering is done by us in refine_records.
         argv = tool.argv("-silent", "-json", "-a") + dnsx_resolver_args(ctx)
-        return ToolInvocation(argv, input_text="\n".join(uniq))
+        probes = (sorted(self._wildcard_probes(ctx))
+                  if self._spec(ctx).get("wildcard_filter", True) else [])
+
+        if not self._brute_active(ctx):
+            # Resolve-only: small set — feed via stdin.
+            names = list(dict.fromkeys(list(items) + probes))
+            return ToolInvocation(argv, input_text="\n".join(names))
+
+        # Brute: candidates = wordlist × APEX (not × every discovered sub — that
+        # multiplies into hundreds of millions). The candidates are STREAMED to a
+        # file and dnsx reads it with `-l`, so the FULL wordlist (even millions of
+        # lines) runs without ever living in memory or a giant stdin string.
+        path = self._write_candidate_file(ctx, items, probes)
+        if path is None:   # no writable dir (e.g. unit test) — fall back to stdin
+            names = list(dict.fromkeys(list(items) + probes))
+            return ToolInvocation(argv, input_text="\n".join(names))
+        return ToolInvocation(argv + ["-l", path])
+
+    def _write_candidate_file(self, ctx, items, probes) -> str | None:
+        """Stream resolve targets + (wordlist × apex) brute candidates to a file.
+
+        O(1) memory: the wordlist is read line-by-line and written straight out, so
+        list size is bounded only by disk + dnsx throughput, not RAM. ``max_candidates``
+        (optional) caps the brute count; unset = the whole wordlist.
+        """
+        results_dir = getattr(ctx, "results_dir", None)
+        if results_dir is not None:
+            path = Path(results_dir) / "dns_candidates.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            fd, tmp = tempfile.mkstemp(prefix="dns_candidates-", suffix=".txt")
+            os.close(fd)
+            path = Path(tmp)
+
+        brute = self._brute(ctx)
+        cap = int(brute.get("max_candidates", 0) or 0)   # 0/unset = no cap (streaming-safe)
+        apexes = list(dict.fromkeys(host_of(t) or t for t in ctx.scope.targets))
+        ai_words = self._extra_wordlist(ctx, "ai_subwords")   # AI seam (Phase 0)
+        wl_path = brute.get("wordlist") or _DEFAULT_WORDLIST
+
+        written = 0
+        seen_small = set()
+        with path.open("w", encoding="utf-8") as fh:
+            for n in list(items) + probes:                # resolve known names + probes (small)
+                if n and n not in seen_small:
+                    seen_small.add(n)
+                    fh.write(n + "\n")
+            for apex in apexes:                           # brute: word.<apex>, streamed
+                for w in self._stream_words(wl_path):
+                    fh.write(f"{w}.{apex}\n")
+                    written += 1
+                    if cap and written >= cap:
+                        break
+                for w in ai_words:
+                    fh.write(f"{w}.{apex}\n")
+                if cap and written >= cap:
+                    break
+        return str(path)
+
+    @staticmethod
+    def _stream_words(path: str):
+        """Yield cleaned wordlist entries one at a time (no full-file load)."""
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    w = line.strip()
+                    if w and not w.startswith("#"):
+                        yield w
+        except OSError:
+            return
 
     def refine_records(self, ctx, item, records: list) -> list:
         """Drop wildcard-DNS false positives + the synthetic probe hosts."""
@@ -240,12 +284,3 @@ class DnsResolve(ToolModule):
     def _scope_has_wildcard(scope) -> bool:
         pools = list(scope.in_scope or []) + list(scope.targets or [])
         return any("*" in str(p) for p in pools)
-
-    @staticmethod
-    def _load_words(brute: dict) -> list[str]:
-        path = brute.get("wordlist") or _DEFAULT_WORDLIST
-        try:
-            lines = Path(path).read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return []
-        return [w.strip() for w in lines if w.strip() and not w.startswith("#")]

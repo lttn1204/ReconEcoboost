@@ -35,7 +35,7 @@ context: curated
 #             top-K URLs, round-robined so noisy subdomains can't crowd out quiet ones
 context_scope: global
 
-context_top_n: 25               # GLOBAL scope: total ranked targets across all hosts
+context_top_n: 120               # GLOBAL scope: total ranked targets across all hosts
 context_per_host: 5             # PER_HOST scope: top URLs kept per subdomain
 context_include_host_roots: true  # PER_HOST: always include every live host root
 context_max_nodes: 60           # hard ceiling on nodes sent (incl. neighbors), either scope

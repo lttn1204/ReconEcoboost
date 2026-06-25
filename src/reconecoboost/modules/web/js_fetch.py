@@ -66,8 +66,11 @@ def load_bodies(results_dir) -> list[tuple[str, str]]:
         url, fname = entry.get("url"), entry.get("file")
         if not url or not fname:
             continue
+        # file may be an absolute path (httpx stored_response_path) or relative to
+        # the responses dir (inline-body fallback).
+        path = Path(fname) if Path(fname).is_absolute() else index.parent / fname
         try:
-            out.append((url, (index.parent / fname).read_text(encoding="utf-8", errors="ignore")))
+            out.append((url, path.read_text(encoding="utf-8", errors="ignore")))
         except OSError:
             continue
     return out
@@ -110,7 +113,13 @@ class JsFetch(BaseModule):
         responses_dir = Path(results_dir) / "responses"
         responses_dir.mkdir(parents=True, exist_ok=True)
         conn_timeout = int(spec.get("conn_timeout_s", 15))
-        argv = (tool.argv("-silent", "-json", "-include-response",
+        # STREAMING: httpx writes each body to disk (-srd); we do NOT use
+        # -include-response, so the bodies are NOT inlined into stdout. stdout stays
+        # small (one metadata line + stored_response_path per URL) regardless of how
+        # many/large the bodies are → memory is O(1) in body size, so max_urls can be
+        # generous without OOM (the old -include-response buffered every body in RAM,
+        # which forced the tiny 500 cap and silently dropped secrets on JS-heavy sites).
+        argv = (tool.argv("-silent", "-json",
                           "-store-response", "-store-response-dir", str(responses_dir),
                           "-t", str(conn_timeout))
                 + self._rate_args(ctx))
@@ -159,6 +168,10 @@ class JsFetch(BaseModule):
         return out[:cap] if cap else out
 
     def _store_bodies(self, stdout: str, responses_dir: Path) -> list[dict]:
+        """Build url->file index from httpx metadata. Bodies are already on disk
+        (httpx -store-response-dir wrote them); we only map url -> stored_response_path,
+        never re-read/re-buffer bodies → O(1) memory regardless of body size/count.
+        Falls back to an inline body field only if a stored path is absent."""
         index: list[dict] = []
         for i, line in enumerate(stdout.splitlines()):
             line = line.strip()
@@ -169,28 +182,21 @@ class JsFetch(BaseModule):
             except json.JSONDecodeError:
                 continue
             url = obj.get("url") or obj.get("input")
-            body = self._body(obj)
-            if not url or not body:
+            if not url:
                 continue
-            fname = f"body-{i:04d}.txt"
-            (responses_dir / fname).write_text(body, encoding="utf-8")
-            index.append({"url": url, "file": fname})
+            stored = obj.get("stored_response_path")
+            if stored:
+                index.append({"url": url, "file": stored})   # absolute path → read as-is
+                continue
+            # rare fallback: body inlined (no stored path) → persist it ourselves
+            body = next((obj[k] for k in ("response", "body", "raw")
+                         if isinstance(obj.get(k), str) and obj.get(k)), "")
+            if body:
+                fname = f"body-{i:04d}.txt"
+                (responses_dir / fname).write_text(body, encoding="utf-8")
+                index.append({"url": url, "file": fname})
         (responses_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
         return index
-
-    @staticmethod
-    def _body(obj: dict) -> str:
-        for field_name in ("response", "body", "raw"):
-            value = obj.get(field_name)
-            if isinstance(value, str) and value:
-                return value
-        stored = obj.get("stored_response_path")
-        if stored:
-            try:
-                return Path(stored).read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                return ""
-        return ""
 
     @staticmethod
     def _spec(ctx) -> dict:

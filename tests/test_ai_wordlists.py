@@ -102,6 +102,26 @@ def test_ai_subwords_ai_error_is_inert(tmp_path):
     store.close()
 
 
+def test_ai_subwords_falls_back_when_versioned_prompt_missing(tmp_path):
+    # prompt_version v2 has no ai_subwords variant -> must fall back to base, not fail
+    store = _store()
+    provider = StubProvider(parsed={"words": ["lpb-qa"]})
+    ctx = Context(
+        domain=Domain.WEB, scope=Scope(targets=["example.com"], in_scope=["*.example.com"]),
+        config=Config(pipeline={}, ai={"prompt_version": "v2"}),
+        repository=store, results_dir=tmp_path, ai=provider,
+    )
+    _seed_subs(store, ctx, ["api.example.com"])
+
+    result = AiSubwords().run(ctx)
+
+    assert result.status == ModuleStatus.SUCCESS
+    assert not (result.error or "")               # no PromptError surfaced
+    words = [w for w in (tmp_path / "ai_subwords.txt").read_text().splitlines() if not w.startswith("#")]
+    assert "lpb-qa" in words                       # generated via the base prompt fallback
+    store.close()
+
+
 def test_ai_subwords_respects_max_words(tmp_path):
     store = _store()
     provider = StubProvider(parsed={"words": [f"lab{i}" for i in range(50)]})

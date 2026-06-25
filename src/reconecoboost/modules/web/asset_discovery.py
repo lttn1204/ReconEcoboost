@@ -20,7 +20,12 @@ class AssetDiscovery(ToolModule):
     tool = "subfinder"
     parser = "subfinder"
     input_type = None  # seeded from scope targets
-    recursive = True   # re-feed found subdomains as seeds (depth from config)
+    # NOT recursive: subfinder is PASSIVE and already enumerates deeply, so re-running
+    # it on every discovered subdomain yields almost nothing new while multiplying runs
+    # explosively (depth 3 on a big org = dozens-to-hundreds of subfinder runs that can
+    # hang the pipeline before anything is validated). Recursive sub-of-sub discovery is
+    # left to ACTIVE brute (dns_resolve, gated + capped) and the bounded discovery loop.
+    recursive = False
 
     def command(self, tool, item, ctx) -> ToolInvocation:
         return ToolInvocation(tool.argv("-silent", "-d", item))

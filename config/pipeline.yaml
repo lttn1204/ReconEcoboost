@@ -8,7 +8,7 @@ domain: web
 #   2   also scan subdomains-of-subdomains
 #   100 keep going until no new subdomains are found (bounded by this number)
 discovery:
-  recursive_depth: 1
+  recursive_depth: 2
 
   # Cross-module discovery loop: re-run discovery/expansion stages so subdomains
   # found in page content (content_subdomains) or by brute get resolved, crawled
@@ -17,7 +17,7 @@ discovery:
   # subdomain appears. OFF by default (single pass = current behavior).
   loop:
     enabled: false
-    rounds: 1          # max rounds when enabled (depth of the feedback loop)
+    rounds: 2          # max rounds when enabled (depth of the feedback loop)
 
 # DNS resolution (dnsx): validate discovered subdomains, attach resolved IP(s),
 # flag `internal` (RFC1918/loopback), and filter wildcard-DNS false positives.
@@ -38,10 +38,14 @@ dns_resolve:
   #   both     probe everything; use all IPs
   prefer: both
   brute:
-    enabled: true                          # generate word.<name> and resolve (wildcard scope only)
-    wordlist: wordlists/dns/subdomains.txt # swap for a bigger list any time
-    depth: 2                               # 1 = brute under apex+known subs; 2+ = recurse into found (sub-of-sub)
-    # max_candidates: 100000               # cap generated candidates per level (0/omit = all)
+    enabled: true                          # generate word.<apex> and resolve (wildcard scope only)
+    wordlist: wordlists/dns/httparchive_subdomains_2026_02_27.txt # any size — streamed, not loaded
+    # Candidates = wordlist × APEX, STREAMED to a file and resolved via dnsx -l, so the
+    # FULL wordlist (even millions of lines) runs with flat memory (~17MB for 3.2M). No
+    # cap needed; set max_candidates only to LIMIT the brute (omit/0 = whole wordlist).
+    # max_candidates: 0
+    # depth: removed — brute targets the apex; sub-of-sub expansion is done by
+    # permutation (alterx) + the discovery loop, not by multiplying word × every sub.
 
 # Subdomain permutation (alterx -> dnsx) — ENUMERATION stage, wildcard scope only.
 # Learns naming patterns from known subdomains and mutates them (api -> api-dev,
@@ -64,7 +68,7 @@ tls_intel:
 # in config/tools.local.yaml (gitignored) as github_subdomains.token. No token => the
 # stage is SKIPPED. Saved to results/<run_id>/github_subdomains.txt.
 github_subdomains:
-  enabled: true
+  enabled: false
   # token: ""            # prefer GITHUB_TOKEN env; this is a fallback (keep in *.local.yaml)
 
 # GitHub leaked-secret scan (trufflehog) — scans an org's / repos' GitHub history for
@@ -111,7 +115,7 @@ dir_bruteforce:
   methods: [GET,POST]          # HTTP methods to test (feroxbuster -m, all in one run)
   recursion:
     enabled: true
-    depth: 2              # 0/disabled = flat; 1 = one level deeper (default, safe); 2+ = deeper (heavier)
+    depth: 3              # 0/disabled = flat; 1 = one level deeper (default, safe); 2+ = deeper (heavier)
     force: false          # --force-recursion: recurse on EVERY found endpoint (incl 401/403), more aggressive
   match_status: [200, 204, 301, 302, 307, 308, 401, 403, 405]  # statuses treated as found
   extract_links: false    # feroxbuster link-extraction off (katana already crawls links)
@@ -122,6 +126,13 @@ dir_bruteforce:
 # prefer=internal/both. Seeds are always probed.
 alive_detection:
   timeout_s: 15    # per-connection timeout (httpx -t); raise for slow/internal targets
+
+# url_probe (httpx): validate discovered URLs (crawl/gau/dir) so nuclei only scans
+# live ones. gau can surface hundreds of thousands of URLs, so the set is capped to
+# bound memory (giant stdin + one JSON line buffered per URL). 0 = no cap.
+url_probe:
+  timeout_s: 15
+  max_urls: 100000   # cap URLs probed in one httpx run (OOM guard; raise if needed)
 
 # Deterministic triage (no LLM): ranks assets by signal and groups noise.
 # Inspired by uro (declutter), reNgine (interesting keywords), gf-patterns
@@ -144,7 +155,10 @@ js_fetch:
   extensions: [js, json, map, txt, xml, yml, yaml, env, config, bak]
   scan_status: [200]    # ALSO fetch live URLs with these statuses (any extension);
                         #   covers dir-fuzz + URL-history hits. [] = extensions only.
-  max_urls: 500         # cap how many URLs are fetched (omit/0 = no cap)
+  max_urls: 5000        # how many URLs to fetch. Bodies stream to disk (not RAM), so
+                        #   this is a TIME/network bound now, NOT a memory one — raise
+                        #   freely (or 0 = all) to scan more JS for secrets. (Was 500 to
+                        #   avoid OOM when bodies were buffered in memory; no longer needed.)
   conn_timeout_s: 15    # per-connection timeout (httpx -t); slow hosts (e.g. F5/BigIP
                         #   ~8s) drop their body at httpx's 5s default -> missing secrets
   # timeout_s: 600      # overall subprocess timeout for the whole batch (executor)
@@ -172,7 +186,7 @@ api_discovery:
 param_discovery:
   enabled: true
   engine: arjun         # arjun (default) | x8 (faster Rust drop-in, add to tools.yaml)
-  methods: [GET]        # GET / POST / JSON / XML — one arjun pass each (work multiplies)
+  methods: [GET,POST]        # GET / POST / JSON / XML — one arjun pass each (work multiplies)
   max_urls: 50          # cap endpoints fuzzed (deduped by path; from LIVE urls). Param
                         #   fuzzing is heavy on slow hosts — lower this if it times out.
   timeout_s: 1800       # whole-stage timeout for arjun (default executor 600s is too low)
@@ -215,9 +229,9 @@ content_subdomains:
 # observed names, dirwords from crawled paths, params from fetched JS) and makes ONE
 # schema-constrained call. Inert when AI is off (--no-ai / ai-mode off). max_words caps
 # how many candidates each adds. Saved to results/<run_id>/ai_*.txt.
-ai_subwords: { enabled: true, max_words: 30 }
-ai_dirwords: { enabled: true, max_words: 30 }
-ai_params:   { enabled: true, max_words: 20 }
+ai_subwords: { enabled: true, max_words: 150 }
+ai_dirwords: { enabled: true, max_words: 150 }
+ai_params:   { enabled: true, max_words: 100 }
 
 profiles:
   default:

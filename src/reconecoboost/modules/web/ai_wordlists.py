@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ...analysis.params import mine_js_params, query_param_names
+from ...core.errors import PromptError
 from ...core.models import Domain, ModuleResult, ModuleStatus, Stage
 from ...core.module import BaseModule
 from ...logging.setup import get_logger
@@ -140,8 +141,16 @@ class _AiWordlist(BaseModule):
     def _prompt(self, ctx):
         prompts_dir = (ctx.config.ai.get("prompts", {}) or {}).get("dir", "prompts")
         version = str((ctx.config.ai or {}).get("prompt_version", "v1")).strip().lower()
-        name = self.prompt_name if version in ("", "v1", "default") else f"{version}/{self.prompt_name}"
-        return PromptManager(prompts_dir).get("web", name)
+        pm = PromptManager(prompts_dir)
+        # Use the versioned prompt if it exists; otherwise fall back to the base (v1)
+        # prompt. The wordlist prompts may not have a per-version variant (only
+        # recon_intel/pentest do), so a global prompt_version (e.g. v2) must not break them.
+        if version not in ("", "v1", "default"):
+            try:
+                return pm.get("web", f"{version}/{self.prompt_name}")
+            except PromptError:
+                pass
+        return pm.get("web", self.prompt_name)
 
     def _apex(self, ctx) -> str:
         for target in ctx.scope.targets:

@@ -66,7 +66,8 @@ def test_dns_brute_folds_ai_subwords(tmp_path):
 
     DnsResolve().run(ctx)
 
-    fed = set(ex.calls[0][1].split())
+    # brute candidates are streamed to a file (dnsx -l), not stdin
+    fed = set((tmp_path / "dns_candidates.txt").read_text().split())
     assert "dev.example.com" in fed             # base wordlist
     assert "adminpanel.example.com" in fed      # AI seam word folded in
     store.close()

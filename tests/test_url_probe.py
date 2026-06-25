@@ -74,3 +74,26 @@ def test_url_probe_records_status_on_existing_url_assets():
     assert by_key["https://a.example.com/admin"]["status_code"] == 403
     assert "status_code" not in by_key["https://a.example.com/ghost"]  # never responded
     store.close()
+
+
+def test_url_probe_caps_url_count():
+    db = Database(":memory:")
+    db.connect()
+    db.initialize()
+    store = Store(db)
+    ex = FakeExecutor()
+    ctx = Context(
+        domain=Domain.WEB, scope=Scope(targets=["example.com"]),
+        config=Config(pipeline={"url_probe": {"max_urls": 5}}),
+        executor=ex, tools=FakeTools(), repository=store,
+    )
+    store.start_run(ctx)
+    store.persist_normalization(ctx.run_id, Normalizer().normalize([
+        ParsedRecord("url", f"https://a.example.com/p{i}", tool="gau") for i in range(20)
+    ]))
+
+    UrlProbe().run(ctx)
+
+    fed = [u for u in (ex.input_text or "").splitlines() if u.strip()]
+    assert len(fed) == 5            # capped — not all 20 fed to httpx
+    store.close()

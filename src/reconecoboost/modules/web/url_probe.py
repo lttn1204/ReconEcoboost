@@ -29,6 +29,15 @@ class UrlProbe(ToolModule):
     batch = True  # feed all URLs to one httpx invocation via stdin
     output_ext = "jsonl"
 
+    def _gather_inputs(self, ctx) -> list[str]:
+        # Bound the URL set: gau/crawl can surface hundreds of thousands of URLs;
+        # feeding them all to httpx (giant stdin + a JSON line buffered per URL) can
+        # exhaust memory. Cap to a generous default; raise/lower via url_probe.max_urls
+        # (0 = no cap). Validating that many archive URLs has diminishing returns anyway.
+        urls = super()._gather_inputs(ctx)
+        cap = int((ctx.config.pipeline.get("url_probe", {}) or {}).get("max_urls", 100000) or 0)
+        return urls[:cap] if cap else urls
+
     def batch_command(self, tool, items, ctx) -> ToolInvocation:
         spec = (ctx.config.pipeline.get("url_probe", {}) or {})
         timeout = int(spec.get("timeout_s", 15))
