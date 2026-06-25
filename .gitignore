@@ -30,7 +30,6 @@ results/*
 config/scope.yaml
 
 # Large user wordlists — ship only the small starters
-wordlists/ffuf/*.txt
 !wordlists/ffuf/common.txt
 !wordlists/ffuf/directories.txt
 !wordlists/ffuf/vhosts.txt
