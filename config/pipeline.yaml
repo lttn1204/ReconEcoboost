@@ -25,6 +25,11 @@ discovery:
 # Resolved summary saved to results/<run_id>/dns_resolve.txt.
 dns_resolve:
   wildcard_filter: true   # use dnsx -wd to drop wildcard-DNS noise
+  timeout_s: 1800         # whole-stage timeout. A full multi-million-word brute over
+                          #   the apex needs minutes-to-an-hour; the global 600s default
+                          #   would kill it. Raise for huge lists, or lower for speed.
+                          #   (3.2M words at dnsx rate 1000/s ≈ 54min — raise rate or
+                          #    timeout, or use a smaller list, if it still times out.)
   # DNS resolvers for dnsx (used by dns_resolve AND permutation). Omit/null =>
   # use the OS resolver from /etc/resolv.conf (dnsx's public-resolver defaults
   # are silently empty when outbound UDP 53 is filtered). [] => dnsx defaults.
@@ -39,6 +44,10 @@ dns_resolve:
   prefer: both
   brute:
     enabled: true                          # generate word.<apex> and resolve (wildcard scope only)
+    skip_on_wildcard: true                 # if the apex has a wildcard DNS record, SKIP brute
+                                           #   entirely (every name would resolve to the catch-all
+                                           #   = 100% false positives + millions of wasted queries).
+                                           #   Detected up-front via random-name probes. false=force.
     wordlist: wordlists/dns/httparchive_subdomains_2026_02_27.txt # any size — streamed, not loaded
     # Candidates = wordlist × APEX, STREAMED to a file and resolved via dnsx -l, so the
     # FULL wordlist (even millions of lines) runs with flat memory (~17MB for 3.2M). No
@@ -92,9 +101,17 @@ github_secrets:
 # hosts. Results saved to results/<run_id>/vhost.txt.
 vhost_discovery:
   enabled: true
-  schemes: [https, http]   # fuzz both
+  schemes: [https, http]   # fuzz both. ONE ffuf run per IP per scheme — so each IP =
+                           #   2 runs. On a CDN/wildcard apex (resolves to MANY edge IPs)
+                           #   this is N_IPs × 2 runs of near-zero value (edges are catch-all,
+                           #   no exposed origin). Use [https] only + lower max_ips for CDNs.
   auto_calibrate: true     # ffuf -ac: drop catch-all false positives
-  max_ips: 50              # cap distinct IPs fuzzed (configurable)
+  max_ips: 50              # cap distinct IPs fuzzed — lower (e.g. 5-10) for CDN targets
+  request_timeout_s: 7     # ffuf -timeout: bound per-request waits (filtered port 80 hangs)
+  timeout_s: 300           # per-ffuf whole-run timeout. vhost = Host-header brute of COMMON names
+                           #   — use a SMALL wordlist (wordlists.yaml `vhosts`), NOT a
+                           #   3M subdomain list (that times out per-IP and finds nothing
+                           #   a DNS brute wouldn't). This caps the waste if it's too big.
 
 # Active crawl (katana). BOUNDED by default — katana otherwise crawls a host with
 # NO page/time limit, so a huge site (e.g. a Google property) streams gigabytes that
@@ -125,14 +142,16 @@ dir_bruteforce:
 # Internal-only hosts are skipped when prefer=public (default), or probed when
 # prefer=internal/both. Seeds are always probed.
 alive_detection:
-  timeout_s: 15    # per-connection timeout (httpx -t); raise for slow/internal targets
+  conn_timeout_s: 15   # per-CONNECTION timeout (httpx -t); raise for slow/internal targets
+  # timeout_s: 1800    # whole-stage timeout (probing MANY hosts); default = executor 600s
 
 # url_probe (httpx): validate discovered URLs (crawl/gau/dir) so nuclei only scans
 # live ones. gau can surface hundreds of thousands of URLs, so the set is capped to
 # bound memory (giant stdin + one JSON line buffered per URL). 0 = no cap.
 url_probe:
-  timeout_s: 15
-  max_urls: 100000   # cap URLs probed in one httpx run (OOM guard; raise if needed)
+  conn_timeout_s: 15   # per-CONNECTION timeout (httpx -t)
+  # timeout_s: 1800    # whole-stage timeout (validating many URLs); default = executor 600s
+  max_urls: 100000     # cap URLs probed in one httpx run (OOM guard; raise if needed)
 
 # Deterministic triage (no LLM): ranks assets by signal and groups noise.
 # Inspired by uro (declutter), reNgine (interesting keywords), gf-patterns

@@ -40,6 +40,7 @@ class UrlProbe(ToolModule):
 
     def batch_command(self, tool, items, ctx) -> ToolInvocation:
         spec = (ctx.config.pipeline.get("url_probe", {}) or {})
-        timeout = int(spec.get("timeout_s", 15))
-        return ToolInvocation(tool.argv("-silent", "-json", "-t", str(timeout)),
+        # PER-CONNECTION httpx -t (whole-stage timeout is `timeout_s` via base _timeout).
+        conn_timeout = int(spec.get("conn_timeout_s", 15))
+        return ToolInvocation(tool.argv("-silent", "-json", "-t", str(conn_timeout)),
                               input_text="\n".join(items))

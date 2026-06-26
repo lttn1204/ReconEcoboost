@@ -154,10 +154,11 @@ class ToolModule(BaseModule):
                 ]
 
             level_records = []
+            timeout = self._timeout(ctx)
             for item, inv in pairs:
                 argv = inv.argv + rate_args
                 exec_result = ctx.executor.run(
-                    argv, timeout_s=self.timeout_s, input_text=inv.input_text
+                    argv, timeout_s=timeout, input_text=inv.input_text
                 )
                 capture_path = self._write_capture(ctx, capture_index, exec_result)
                 capture_index += 1
@@ -274,6 +275,22 @@ class ToolModule(BaseModule):
         except (TypeError, ValueError):
             depth = 1
         return max(1, depth)
+
+    def _timeout(self, ctx) -> float | None:
+        """Per-invocation timeout: ``pipeline.<module>.timeout_s`` if set, else the
+        class default (``self.timeout_s``, usually None → executor default).
+
+        Lets slow stages (e.g. dns_resolve over a multi-million-word brute) raise
+        their own ceiling without hitting the short global executor default.
+        """
+        spec = (ctx.config.pipeline.get(self.name, {}) or {})
+        val = spec.get("timeout_s")
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return self.timeout_s
+        return self.timeout_s
 
     def _rate_args(self, ctx) -> list[str]:
         """Return the tool's native requests-per-second flag, from config.

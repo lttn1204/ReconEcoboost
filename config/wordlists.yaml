@@ -9,4 +9,4 @@ wordlists:
   common:
     path: wordlists/ffuf/httparchive_directories_1m_2026_02_27.txt
   vhosts:
-    path: wordlists/dns/httparchive_subdomains_2026_02_27.txt        # used by vhost_discovery (ffuf)
+    path: wordlists/ffuf/vhosts.txt        # used by vhost_discovery (ffuf)

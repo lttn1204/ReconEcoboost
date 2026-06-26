@@ -47,7 +47,10 @@ tools:
   dnsx:
     binary: dnsx
     rate_flag: "-rl"        # dnsx: DNS queries per second
-    rate_limit: null
+    # DNS resolution is cheap (esp. against a local resolver) — the HTTP politeness
+    # default (100/s) makes a big brute take hours. 1000/s is a saner DNS rate; raise
+    # for a fast local resolver, lower if a public resolver rate-limits you.
+    rate_limit: 1000
 
   alterx:
     binary: alterx

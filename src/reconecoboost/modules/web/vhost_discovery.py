@@ -91,10 +91,14 @@ class VhostDiscovery(ToolModule):
 
     def command(self, tool, item, ctx) -> ToolInvocation:
         scheme, target, apex = item.split("|", 2)
+        # -timeout bounds per-request waits: a filtered/closed port (e.g. http on a
+        # CDN edge IP) otherwise hangs ffuf's calibration ~10s/req → ~40s per run.
+        req_timeout = int(self._spec(ctx).get("request_timeout_s", 7))
         args = [
             "-w", self._wordlist(ctx),
             "-u", f"{scheme}://{target}/",
             "-H", f"Host: FUZZ.{apex}",
+            "-timeout", str(req_timeout),
             "-ic", "-of", "json", "-o", "/dev/stdout", "-s",
         ]
         if self._spec(ctx).get("auto_calibrate", True):

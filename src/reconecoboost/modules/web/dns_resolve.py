@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import secrets
 import tempfile
 from pathlib import Path
 
 from ...core.models import Domain, Stage
+from ...logging.setup import get_logger
 from ...orchestration.registry import register
 from ..base import ToolInvocation, ToolModule, host_of
 
@@ -157,6 +159,19 @@ class DnsResolve(ToolModule):
             names = list(dict.fromkeys(list(items) + probes))
             return ToolInvocation(argv, input_text="\n".join(names))
 
+        # WILDCARD SHORT-CIRCUIT: if the apex has a wildcard DNS record, EVERY brute
+        # candidate resolves (to the catch-all) — 100% false positives + millions of
+        # wasted queries. Detect it up-front (cheap: resolve a couple of random names)
+        # and skip the brute entirely; we still resolve the known names (real subs
+        # are kept, wildcard-only ones dropped in refine_records).
+        if self._brute(ctx).get("skip_on_wildcard", True) and self._has_wildcard(ctx, tool):
+            get_logger("module.dns_resolve", run_id=getattr(ctx, "run_id", None)).warning(
+                "dns_resolve: wildcard DNS detected on the apex — SKIPPING brute (every "
+                "name would resolve to the catch-all). Resolving known names only. "
+                "Set dns_resolve.brute.skip_on_wildcard: false to force it.")
+            names = list(dict.fromkeys(list(items) + probes))
+            return ToolInvocation(argv, input_text="\n".join(names))
+
         # Brute: candidates = wordlist × APEX (not × every discovered sub — that
         # multiplies into hundreds of millions). The candidates are STREAMED to a
         # file and dnsx reads it with `-l`, so the FULL wordlist (even millions of
@@ -238,6 +253,25 @@ class DnsResolve(ToolModule):
                 continue  # resolves only to the wildcard IP(s) — false positive
             out.append(r)
         return out
+
+    def _has_wildcard(self, ctx, tool) -> bool:
+        """Cheap up-front wildcard check: resolve a few RANDOM names under each apex.
+        If any resolves, the apex has a wildcard/catch-all DNS record (dnsx -silent
+        emits only resolving hosts, so non-empty stdout = wildcard)."""
+        if ctx.executor is None:
+            return False
+        probes = []
+        for target in ctx.scope.targets:
+            apex = host_of(target) or target
+            if not apex:
+                continue
+            for _ in range(2):
+                probes.append(f"zz{secrets.token_hex(10)}-nx.{apex}")
+        if not probes:
+            return False
+        argv = tool.argv("-silent", "-json", "-a") + dnsx_resolver_args(ctx)
+        res = ctx.executor.run(argv, timeout_s=60, input_text="\n".join(probes))
+        return bool(res.ok and res.stdout.strip())
 
     @staticmethod
     def _wildcard_probes(ctx) -> set[str]:

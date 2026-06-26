@@ -123,7 +123,8 @@ def test_dns_brute_generates_candidates_and_saves_results(tmp_path):
     ex = FakeExecutor(stdout)
     ctx = Context(
         domain=Domain.WEB, scope=Scope(targets=["example.com"], in_scope=["*.example.com"]),
-        config=Config(pipeline={"dns_resolve": {"brute": {"enabled": True, "wordlist": str(wl)}}}),
+        config=Config(pipeline={"dns_resolve": {"brute": {
+            "enabled": True, "wordlist": str(wl), "skip_on_wildcard": False}}}),
         executor=ex, tools=FakeTools(), repository=store, results_dir=tmp_path,
     )
     store.start_run(ctx)
@@ -147,6 +148,34 @@ def test_dns_brute_generates_candidates_and_saves_results(tmp_path):
     # results summary written for review
     summary = (tmp_path / "dns_resolve.txt").read_text()
     assert "dev.example.com" in summary and "1.2.3.4" in summary
+    store.close()
+
+
+def test_dns_brute_skipped_when_wildcard_detected(tmp_path):
+    # wildcard scope + the apex resolves random names (FakeExecutor returns a hit for
+    # ANY input, incl the random wildcard probes) -> brute must be SKIPPED (no -l file).
+    db = Database(":memory:")
+    db.connect()
+    db.initialize()
+    store = Store(db)
+    wl = tmp_path / "subs.txt"
+    wl.write_text("dev\napi\n", encoding="utf-8")
+    ex = FakeExecutor(json.dumps({"host": "zzrandom-nx.example.com", "a": ["9.9.9.9"]}))
+    ctx = Context(
+        domain=Domain.WEB, scope=Scope(targets=["example.com"], in_scope=["*.example.com"]),
+        config=Config(pipeline={"dns_resolve": {"brute": {"enabled": True, "wordlist": str(wl)}}}),
+        executor=ex, tools=FakeTools(), repository=store, results_dir=tmp_path,
+    )
+    store.start_run(ctx)
+    store.persist_normalization(ctx.run_id, Normalizer().normalize([
+        ParsedRecord("subdomain", "www.example.com", tool="subfinder"),
+    ]))
+
+    DnsResolve().run(ctx)
+
+    # brute skipped -> no candidate file, and the main dnsx call used stdin (no -l)
+    assert not (tmp_path / "dns_candidates.txt").exists()
+    assert not any("-l" in (call[0] or []) for call in ex.calls)
     store.close()
 
 
@@ -174,6 +203,20 @@ def test_dns_brute_skipped_without_wildcard_scope(tmp_path):
     assert "dev.example.com" not in fed and "api.example.com" not in fed  # no brute
     assert "example.com" in fed                                           # but resolve still runs
     store.close()
+
+
+def test_alive_detection_conn_timeout_not_whole_stage():
+    # regression: conn_timeout_s must be the httpx -t (per-connection), NOT the
+    # whole-stage timeout. Conflating them killed the whole probe at 15s -> 0 hosts.
+    from reconecoboost.engine import ToolHandle
+    ctx = Context(
+        domain=Domain.WEB, scope=Scope(targets=["example.com"]),
+        config=Config(pipeline={"alive_detection": {"conn_timeout_s": 15}}),
+    )
+    m = AliveDetection()
+    inv = m.batch_command(ToolHandle(name="httpx", binary="httpx", path="/h"), ["a.example.com"], ctx)
+    assert inv.argv[inv.argv.index("-t") + 1] == "15"   # per-connection
+    assert m._timeout(ctx) is None                       # whole-stage NOT capped at 15
 
 
 def test_alive_detection_skips_internal_by_default():

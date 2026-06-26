@@ -52,6 +52,9 @@ class AliveDetection(ToolModule):
 
     def batch_command(self, tool, items, ctx) -> ToolInvocation:
         spec = (ctx.config.pipeline.get("alive_detection", {}) or {})
-        timeout = int(spec.get("timeout_s", 10))
-        return ToolInvocation(tool.argv("-silent", "-json", "-t", str(timeout)),
+        # PER-CONNECTION httpx -t (NOT the whole-stage timeout — that's `timeout_s`,
+        # honoured by the base via _timeout; conflating them killed the whole probe
+        # at 15s → 0 live hosts → the entire downstream pipeline got no input).
+        conn_timeout = int(spec.get("conn_timeout_s", 15))
+        return ToolInvocation(tool.argv("-silent", "-json", "-t", str(conn_timeout)),
                               input_text="\n".join(items))

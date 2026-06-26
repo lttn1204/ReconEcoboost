@@ -57,7 +57,8 @@ def test_dns_brute_folds_ai_subwords(tmp_path):
     ctx = Context(
         domain=Domain.WEB,
         scope=Scope(targets=["example.com"], in_scope=["*.example.com"]),
-        config=Config(pipeline={"dns_resolve": {"brute": {"enabled": True, "wordlist": str(wl)}}}),
+        config=Config(pipeline={"dns_resolve": {"brute": {
+            "enabled": True, "wordlist": str(wl), "skip_on_wildcard": False}}}),
         executor=ex, tools=FakeTools(), repository=store, results_dir=tmp_path,
     )
     store.start_run(ctx)
