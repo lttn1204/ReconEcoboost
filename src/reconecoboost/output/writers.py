@@ -117,8 +117,21 @@ class MarkdownReportWriter(ReportWriter):
                             add(f"  - {detail[key]}")
                     if detail.get("steps"):
                         add("  - Steps: " + "; ".join(str(s) for s in detail["steps"]))
+                    if detail.get("test_steps"):
+                        add("  - Steps: " + "; ".join(str(s) for s in detail["test_steps"]))
                     if detail.get("targets"):
                         add("  - Targets: " + ", ".join(str(t) for t in detail["targets"]))
+                    # PoC / where-it-hit (nuclei + AI pentest) — reproduce by hand.
+                    if detail.get("matched_at"):
+                        add(f"  - Matched at: {detail['matched_at']}")
+                    if detail.get("poc"):                       # AI pentest PoC
+                        add(f"  - PoC: `{detail['poc']}`")
+                    if detail.get("curl_command"):              # nuclei reproduce cmd
+                        add(f"  - PoC: `{detail['curl_command']}`")
+                    if detail.get("reference"):
+                        ref = detail["reference"]
+                        ref = ", ".join(ref) if isinstance(ref, list) else ref
+                        add(f"  - Reference: {ref}")
             add("")
 
     @staticmethod

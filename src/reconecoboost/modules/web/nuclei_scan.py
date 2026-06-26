@@ -55,11 +55,10 @@ class NucleiScan(BaseModule):
             result.meta = {"targets": 0}
             return result
 
-        argv = (
-            tool.argv("-silent", "-jsonl", "-duc")  # jsonl out; disable update check
-            + self._severity_args(ctx)
-            + self._rate_args(ctx)
-        )
+        argv = tool.argv("-silent", "-jsonl", "-duc")  # jsonl out; disable update check
+        if self._spec(ctx).get("include_request_response", False):
+            argv += ["-irr"]   # embed full request/response in each result (bigger output)
+        argv += self._severity_args(ctx) + self._rate_args(ctx)
         exec_result = ctx.executor.run(argv, input_text="\n".join(targets), timeout_s=self._timeout(ctx))
 
         capture_path = self._capture(ctx, exec_result.stdout) if exec_result.ok else None
@@ -128,8 +127,13 @@ class NucleiScan(BaseModule):
                     "type": obj.get("type"),
                     "host": obj.get("host"),
                     "matched_at": obj.get("matched-at") or obj.get("matched"),
-                    "tags": info.get("tags"),
+                    # PoC to reproduce the finding by hand:
+                    "curl_command": obj.get("curl-command"),
+                    "matcher_name": obj.get("matcher-name"),
                     "extracted": obj.get("extracted-results"),
+                    "request": obj.get("request"),    # present only when run with -irr
+                    "response": obj.get("response"),  # present only when run with -irr
+                    "tags": info.get("tags"),
                     "reference": info.get("reference"),
                 },
                 source="nuclei_scan",

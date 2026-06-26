@@ -27,7 +27,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 go_install() {  # name  module@version
     local name="$1" module="$2"
-    if have "$name"; then skip "$name"; return; fi
+    # Check the Go install target specifically, NOT `command -v` — a venv Python shim
+    # (e.g. the `httpx` library's CLI) can shadow the real Go binary on PATH and trick
+    # us into skipping it, leaving the ProjectDiscovery binary uninstalled.
+    if [ -x "$GOBIN_DIR/$name" ]; then skip "$name"; return; fi
     if ! have go; then fail "$name — Go not installed (https://go.dev/dl/)"; return; fi
     echo "  installing $name ..."
     if GOBIN="$GOBIN_DIR" go install -v "$module" >/dev/null 2>&1; then
