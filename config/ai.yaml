@@ -47,8 +47,11 @@ prompts:
 #   v1  the original prompts  (prompts/web/recon_intel.md, pentest.md)
 #   v2  research-tuned set: stronger role, vuln-class playbook, severity/confidence
 #       rubric, few-shot example, anti-prompt-injection  (prompts/web/v2/*.md)
+#   v3  post-recon FP-killer pentest: explicitly reasons over the already-collected
+#       tool output, REQUIRES concrete request/response evidence per finding (the
+#       `evidence` field), strict confirmed-vs-lead rubric  (prompts/web/v3/*.md)
 # Add more by creating prompts/web/<version>/<name>.md and setting this.
-prompt_version: v2
+prompt_version: v3
 
 budget:
   max_tokens_per_run: null

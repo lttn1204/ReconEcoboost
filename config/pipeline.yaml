@@ -215,6 +215,14 @@ param_discovery:
   # chunk_size: 256     # arjun -c params per request (omit = arjun auto)
   # wordlist: ...       # base param wordlist (omit = arjun's built-in db/large.txt)
 
+# Vulnerability scanning (nuclei). include_request_response adds nuclei's -irr so
+# every finding carries the full request+response — this is the concrete req/resp
+# EVIDENCE the AI pentest (ai-mode=pentest) cites and the report renders. Bigger
+# output per finding, but findings are few; turn off if output volume is a concern.
+nuclei_scan:
+  enabled: true
+  include_request_response: true
+
 # Secret scanning (leaklens-style): regex-scan the fetched bodies for exposed
 # secrets. Matches redacted before storage. results/<run_id>/secrets.{json,txt}.
 secret_scan:

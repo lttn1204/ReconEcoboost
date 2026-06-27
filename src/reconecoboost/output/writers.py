@@ -121,6 +121,8 @@ class MarkdownReportWriter(ReportWriter):
                         add("  - Steps: " + "; ".join(str(s) for s in detail["test_steps"]))
                     if detail.get("targets"):
                         add("  - Targets: " + ", ".join(str(t) for t in detail["targets"]))
+                    if detail.get("evidence"):                  # AI pentest req/resp proof
+                        add(f"  - Evidence: {detail['evidence']}")
                     # PoC / where-it-hit (nuclei + AI pentest) — reproduce by hand.
                     if detail.get("matched_at"):
                         add(f"  - Matched at: {detail['matched_at']}")
