@@ -151,6 +151,20 @@ def build_parser() -> argparse.ArgumentParser:
         "analyze: + recon intel · pentest: + AI vuln hunting. Overrides ai.mode in ai.yaml.",
     )
     parser.add_argument(
+        "--ai-two-stage",
+        action="store_true",
+        help="ai_pentest two-pass mode: after the first pass, run a second "
+        "self-critique pass that re-verifies evidence and drops weak findings "
+        "(fewer false positives, ~2x AI tokens). Overrides ai.two_stage in ai.yaml.",
+    )
+    parser.add_argument(
+        "--ai-agentic",
+        action="store_true",
+        help="ai_pentest AGENTIC mode (v5): run a live observe->reason->probe loop that "
+        "sends NON-destructive, in-scope requests to CONFIRM leads. Sends live traffic to "
+        "your scope — authorized targets only. Overrides ai.agentic.enabled in ai.yaml.",
+    )
+    parser.add_argument(
         "--enumerate",
         choices=["auto", "always", "never"],
         default="auto",
@@ -189,6 +203,10 @@ def main(argv: list[str] | None = None) -> int:
     config = ConfigLoader(Path(args.config_dir)).load()
     if args.depth is not None:
         config.pipeline.setdefault("discovery", {})["recursive_depth"] = args.depth
+    if getattr(args, "ai_two_stage", False):
+        config.ai["two_stage"] = True
+    if getattr(args, "ai_agentic", False):
+        config.ai.setdefault("agentic", {})["enabled"] = True
     load_domain(domain.value)
 
     if args.run_id:
@@ -318,6 +336,10 @@ def _run_ai_only(args, config: Config, domain: Domain, log) -> int:
         )
         ctx.graph = SqliteKnowledgeGraph(store.db)
         ctx.workspace = Path("runs") / run_id
+        # The original run's raw outputs (incl. stored response bodies the agentic
+        # pentest reads, and the AI-seam files it exports) live here.
+        ctx.results_dir = Path("results") / run_id
+        ctx.results_dir.mkdir(parents=True, exist_ok=True)
 
         # Replace any prior AI findings so re-analysis doesn't pile up duplicates.
         store.clear_findings(run_id, list(ALL_AI_STAGES))

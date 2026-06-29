@@ -71,6 +71,8 @@ class MarkdownReportWriter(ReportWriter):
 
         self._render_top_targets(report, add)
         self._render_findings(report, add)
+        self._render_pentest_guide(report, add)
+        self._render_agent_log(report, add)
         self._render_params(report, add)
         self._render_assets(report, add)
         self._render_tool_runs(report, add)
@@ -105,16 +107,24 @@ class MarkdownReportWriter(ReportWriter):
         add("## Findings")
         add("")
         for kind, items in findings.items():
+            if kind in ("pentest_guide", "agent_log"):   # rendered as their own sections
+                continue
             add(f"### {kind.replace('_', ' ').title()}")
             add("")
             for item in sorted(items, key=lambda f: _severity_rank(f.get("severity"))):
                 sev = (item.get("severity") or "n/a").upper()
-                add(f"- **[{sev}] {item.get('title', '(untitled)')}**")
+                score = item.get("detail", {}).get("confidence_score") if isinstance(item.get("detail"), dict) else None
+                head = f"- **[{sev}] {item.get('title', '(untitled)')}**"
+                if score is not None:
+                    head += f" _(score {score})_"
+                add(head)
                 detail = item.get("detail")
                 if isinstance(detail, dict):
                     for key in ("detail", "rationale", "summary"):
                         if detail.get(key):
                             add(f"  - {detail[key]}")
+                    if detail.get("impact"):                    # AI pentest business impact
+                        add(f"  - Impact: {detail['impact']}")
                     if detail.get("steps"):
                         add("  - Steps: " + "; ".join(str(s) for s in detail["steps"]))
                     if detail.get("test_steps"):
@@ -135,6 +145,66 @@ class MarkdownReportWriter(ReportWriter):
                         ref = ", ".join(ref) if isinstance(ref, list) else ref
                         add(f"  - Reference: {ref}")
             add("")
+
+    @staticmethod
+    def _render_pentest_guide(report, add) -> None:
+        """AI manual-pentest dossier: stack to research + next steps to keep testing."""
+        guides = report.get("findings", {}).get("pentest_guide", [])
+        if not guides:
+            return
+        detail = guides[0].get("detail") or {}
+        tech = detail.get("tech_stack") or []
+        steps = detail.get("manual_next_steps") or []
+        analysis = detail.get("analysis")
+        if not (tech or steps or analysis):
+            return
+
+        add("## Manual Pentest Guide (AI)")
+        add("")
+        if tech:
+            add("### Tech stack — what to check & research")
+            for t in tech:
+                ver = f" {t.get('version')}" if t.get("version") else ""
+                add(f"- **{t.get('technology', '?')}{ver}** — {t.get('what_to_check', '')}")
+                terms = t.get("search_terms") or []
+                if terms:
+                    add("  - Research: " + "; ".join(f"`{s}`" for s in terms))
+            add("")
+        if steps:
+            add("### Manual next steps")
+            for s in steps:
+                add(f"- {s}")
+            add("")
+        if analysis:
+            add("### AI triage notes")
+            add(f"> {analysis}")
+            add("")
+
+    @staticmethod
+    def _render_agent_log(report, add) -> None:
+        """Agentic probe transcript: the live requests the agent ran + outcomes."""
+        logs = report.get("findings", {}).get("agent_log", [])
+        if not logs:
+            return
+        requests = (logs[0].get("detail") or {}).get("requests") or []
+        if not requests:
+            return
+        add("## Agentic Probe Log")
+        add("")
+        add(f"_{len(requests)} live non-destructive request(s) the agent ran:_")
+        add("")
+        for r in requests:
+            line = f"- `{r.get('method', 'GET')} {r.get('url', '')}`"
+            if r.get("status") is not None:
+                line += f" → {r['status']}"
+            if r.get("location"):
+                line += f" → Location: {r['location']}"
+            if r.get("result"):
+                line += f" → {r['result']}"
+            add(line)
+            if r.get("reason"):
+                add(f"  - why: {r['reason']}")
+        add("")
 
     @staticmethod
     def _render_params(report, add) -> None:

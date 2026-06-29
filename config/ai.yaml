@@ -50,8 +50,42 @@ prompts:
 #   v3  post-recon FP-killer pentest: explicitly reasons over the already-collected
 #       tool output, REQUIRES concrete request/response evidence per finding (the
 #       `evidence` field), strict confirmed-vs-lead rubric  (prompts/web/v3/*.md)
+#   v4  v3 + per-vuln-class CONFIRMATION STANDARD (passive recon can't confirm SQLi/
+#       SSRF/IDOR → forced to leads), chain-of-thought `analysis` scratchpad,
+#       `impact`+`confidence_score` fields, and a MANUAL-PENTEST DOSSIER (tech_stack
+#       to research + manual_next_steps) so a human can keep testing  (prompts/web/v4/*.md)
+#   v5  v4 + AGENTIC: feeds real captured response bodies, and (with agentic.enabled)
+#       runs a live observe→reason→probe loop (guarded HTTP) to CONFIRM leads, exporting
+#       agent-proposed fuzz wordlists. Synthesis cites the probe transcript (prompts/web/v5/*.md)
 # Add more by creating prompts/web/<version>/<name>.md and setting this.
-prompt_version: v3
+prompt_version: v5
+
+# ai_pentest two-pass mode: after the first pass, run a second self-critique pass
+# (prompts/web/<version>/pentest_verify.md) that re-verifies each candidate's evidence
+# and drops/downgrades weak findings — fewer false positives at ~2x AI tokens. v4 and v5
+# ship a pentest_verify prompt; with other versions the second pass is skipped.
+# Override per-run with --ai-two-stage.
+two_stage: false
+
+# AGENTIC pentest (v5, B+C). When enabled, ai_pentest runs a live observe→reason→probe
+# loop: the model plans non-destructive probes, the guarded HTTP client (scope/method/
+# budget enforced) runs them, and the responses feed the next iteration — turning LEADS
+# into CONFIRMED findings. OFF by default because it sends LIVE requests to your scope;
+# only enable for AUTHORIZED targets. Turn on per-run with --ai-agentic. Needs v5 prompts.
+agentic:
+  enabled: false
+  max_iterations: 6        # observe→probe rounds
+  max_requests: 120        # hard cap on total live requests this run
+  per_iteration_actions: 12  # probes the model may run per round
+  methods: [GET, POST]     # allowlist; destructive verbs always refused
+  rate_per_s: 3            # throttle between requests (politeness, no DoS)
+  timeout_s: 15            # per-request timeout
+  max_body_bytes: 20000    # response body captured per request (truncated)
+  # Quota safety (subscription/Pro-Max). If the AI usage limit is hit mid-loop, the
+  # agent CHECKPOINTS to results/<run>/agentic_state.json and pauses; re-running the
+  # SAME command resumes from there when quota returns. max_ai_calls is a PROACTIVE
+  # soft cap on AI calls this run (0 = off) — stop & checkpoint before exhausting quota.
+  max_ai_calls: 0
 
 budget:
   max_tokens_per_run: null
