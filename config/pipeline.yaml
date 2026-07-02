@@ -3,6 +3,15 @@
 
 domain: web
 
+# How many DISTINCT hosts a tool stage scans in parallel. Different hosts are
+# different servers, so this doesn't affect any single host's rate limit (each
+# invocation keeps its own tool --rate). Speeds up per-host stages (dir_bruteforce,
+# url_probe, nuclei, crawling...) by ~this factor when there are many hosts.
+#   1 = serial (old behavior).  Higher = faster but K x memory/processes (the
+# executor buffers each tool's stdout). Override per stage with
+# `<module>.concurrency:`. A single host's invocations always stay serial.
+max_concurrent_targets: 5
+
 # Recursive subdomain/vhost discovery: re-feed found subdomains as new seeds.
 #   1   single pass (no recursion) — the default
 #   2   also scan subdomains-of-subdomains

@@ -39,6 +39,45 @@ def _severity_rank(value: str | None) -> int:
     return order.get((value or "").lower(), 4)
 
 
+# Make the Markdown report plain, readable English ASCII. The AI emits typographic
+# Unicode (em-dash, smart quotes, ellipsis, arrows) and old runs may contain mojibake
+# (UTF-8 read as cp1252, e.g. the bytes for an em-dash showing as three garbled chars).
+# We map punctuation to ASCII, repair that mojibake, then drop anything still non-ASCII
+# so the report is always readable no matter the viewer.
+_PUNCT = {
+    "\u2014": "-", "\u2013": "-", "\u2012": "-", "\u2212": "-",
+    "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+    "\u2026": "...", "\u2022": "*", "\u00a0": " ",
+    "\u2192": "->", "\u2190": "<-",
+}
+
+
+def _mojibake_pairs():
+    """Rebuild each punctuation char's mojibake form (its UTF-8 bytes decoded as cp1252)
+    so we can map it back to ASCII. Longest sequences first."""
+    pairs = []
+    for ch, ascii_ in _PUNCT.items():
+        try:
+            bad = ch.encode("utf-8").decode("cp1252")
+        except UnicodeDecodeError:
+            continue
+        if bad and bad != ch:
+            pairs.append((bad, ascii_))
+    return sorted(pairs, key=lambda kv: len(kv[0]), reverse=True)
+
+
+_MOJIBAKE = _mojibake_pairs()
+
+
+def _to_ascii(text: str) -> str:
+    for bad, good in _MOJIBAKE:      # repair mojibake first (longest match wins)
+        text = text.replace(bad, good)
+    for ch, good in _PUNCT.items():  # then plain typographic Unicode
+        text = text.replace(ch, good)
+    # final guarantee: strip any remaining non-ASCII so it is always readable English
+    return text.encode("ascii", "ignore").decode("ascii")
+
+
 class MarkdownReportWriter(ReportWriter):
     extension = "md"
 
@@ -77,7 +116,7 @@ class MarkdownReportWriter(ReportWriter):
         self._render_assets(report, add)
         self._render_tool_runs(report, add)
 
-        return "\n".join(lines) + "\n"
+        return _to_ascii("\n".join(lines) + "\n")
 
     @staticmethod
     def _render_top_targets(report, add) -> None:

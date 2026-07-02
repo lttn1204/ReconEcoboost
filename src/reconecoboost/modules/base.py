@@ -15,6 +15,7 @@ records are dropped before persistence.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -153,13 +154,13 @@ class ToolModule(BaseModule):
                     for inv in self.commands(tool, item, ctx)
                 ]
 
-            level_records = []
             timeout = self._timeout(ctx)
-            for item, inv in pairs:
-                argv = inv.argv + rate_args
-                exec_result = ctx.executor.run(
-                    argv, timeout_s=timeout, input_text=inv.input_text
-                )
+            executed = self._execute(ctx, pairs, rate_args, timeout)
+
+            # Persist on THIS (main) thread only — the SQLite connection is
+            # single-thread. Iterate in input order so capture files stay deterministic.
+            level_records = []
+            for idx, item, argv, exec_result in sorted(executed, key=lambda r: r[0]):
                 capture_path = self._write_capture(ctx, capture_index, exec_result)
                 capture_index += 1
                 self._record_tool_run(ctx, version, argv, exec_result, capture_path)
@@ -199,6 +200,56 @@ class ToolModule(BaseModule):
 
         result.status = ModuleStatus.SUCCESS
         return result
+
+    def _execute(self, ctx, pairs, rate_args, timeout) -> list:
+        """Run the invocations, parallelizing ACROSS hosts.
+
+        Different hosts are different servers, so they run concurrently (each keeps
+        its own tool rate limit); a single host's invocations stay serial so we never
+        exceed that host's rate. Worker threads ONLY call the subprocess executor —
+        no DB, no file writes, no parsing — because SQLite is single-thread and those
+        happen on the caller's thread afterwards. Returns ``[(idx, item, argv, result)]``.
+        """
+        # Group by host, preserving each pair's original index for deterministic output.
+        groups: dict[str, list] = {}
+        for idx, (item, inv) in enumerate(pairs):
+            key = host_of(item) or f"__batch_{idx}"   # batch/no-host → its own group
+            groups.setdefault(key, []).append((idx, item, inv))
+
+        def run_group(group: list) -> list:
+            out = []
+            for idx, item, inv in group:
+                argv = inv.argv + rate_args
+                exec_result = ctx.executor.run(
+                    argv, timeout_s=timeout, input_text=inv.input_text
+                )
+                out.append((idx, item, argv, exec_result))
+            return out
+
+        workers = min(self._concurrency(ctx), len(groups))
+        if workers <= 1:
+            executed: list = []
+            for group in groups.values():
+                executed.extend(run_group(group))
+            return executed
+
+        executed = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(run_group, g) for g in groups.values()]
+            for future in as_completed(futures):
+                executed.extend(future.result())
+        return executed
+
+    def _concurrency(self, ctx) -> int:
+        """How many hosts to scan in parallel: ``pipeline.<module>.concurrency`` if set,
+        else the global ``pipeline.max_concurrent_targets`` (default 5). 1 = serial."""
+        pipeline = ctx.config.pipeline or {}
+        spec = (pipeline.get(self.name, {}) or {})
+        val = spec.get("concurrency", pipeline.get("max_concurrent_targets", 5))
+        try:
+            return max(1, int(val))
+        except (TypeError, ValueError):
+            return 5
 
     def extra_records(self, ctx) -> list:
         """Records to contribute beyond tool output (e.g. seed targets).

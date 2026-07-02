@@ -145,7 +145,8 @@ def test_report_renders_api_specs_and_graphql_for_manual_test():
     md = MarkdownReportWriter().render(build_report(store, graph, _Ctx.run_id))
 
     assert "### Exposed API specs (Swagger/OpenAPI)" in md
-    assert "https://a.example.com/openapi.json` — 42 endpoint(s)" in md
+    # report is normalized to readable ASCII (em-dash -> hyphen)
+    assert "https://a.example.com/openapi.json` - 42 endpoint(s)" in md
     assert "### GraphQL endpoints" in md
     assert "https://a.example.com/graphql" in md
     store.close()
@@ -170,3 +171,11 @@ def test_manager_writes_all_formats(tmp_path):
     # JSON file is valid JSON
     assert json.loads(outputs["json"].read_text())["run"]["id"] == _Ctx.run_id
     store.close()
+
+
+def test_report_is_readable_ascii():
+    """Mojibake + typographic Unicode are normalized so the report is plain ASCII."""
+    from reconecoboost.output.writers import _to_ascii
+    assert _to_ascii("ARIS Connect â€” score") == "ARIS Connect - score"
+    assert _to_ascii("a — “b” … c → d") == 'a - "b" ... c -> d'
+    assert _to_ascii("plain text").isascii()

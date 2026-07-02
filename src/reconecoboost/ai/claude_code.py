@@ -70,7 +70,8 @@ class ClaudeCodeProvider(AIProvider):
         try:
             proc = subprocess.run(
                 argv, input=input_text, capture_output=True, text=True,
-                timeout=self.timeout_s, env=env,
+                encoding="utf-8", errors="replace",  # CLI emits UTF-8; don't use the
+                timeout=self.timeout_s, env=env,      # machine locale (mangles —/quotes)
             )
         except FileNotFoundError as exc:
             raise AIError(f"Claude Code CLI '{self.cli}' not found on PATH.") from exc
